@@ -1,0 +1,178 @@
+{
+    "total_inconsistencies": 9,
+    "inconsistencies": [
+        {
+            "id": "INC_0",
+            "type": "Invalid Grade",
+            "related_entities": {
+                "student_id": "E9",
+                "exam_id": "EX2"
+            },
+            "field": "nota",
+            "current_value": 23,
+            "expected_constraint": "0 <= nota <= 20",
+            "suggested_repairs": [
+                {
+                    "action": "modify",
+                    "field": "nota",
+                    "new_value": 20,
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_1",
+            "type": "Invalid Grade",
+            "related_entities": {
+                "student_id": "E6",
+                "exam_id": "EX3"
+            },
+            "field": "nota",
+            "current_value": 24,
+            "expected_constraint": "0 <= nota <= 20",
+            "suggested_repairs": [
+                {
+                    "action": "modify",
+                    "field": "nota",
+                    "new_value": 20,
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_2",
+            "type": "Invalid Grade",
+            "related_entities": {
+                "student_id": "E0",
+                "exam_id": "EX1"
+            },
+            "field": "nota",
+            "current_value": 23,
+            "expected_constraint": "0 <= nota <= 20",
+            "suggested_repairs": [
+                {
+                    "action": "modify",
+                    "field": "nota",
+                    "new_value": 20,
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_3",
+            "type": "Invalid Grade",
+            "related_entities": {
+                "student_id": "E3",
+                "exam_id": "EX19"
+            },
+            "field": "nota",
+            "current_value": 24,
+            "expected_constraint": "0 <= nota <= 20",
+            "suggested_repairs": [
+                {
+                    "action": "modify",
+                    "field": "nota",
+                    "new_value": 20,
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_4",
+            "type": "Invalid Grade",
+            "related_entities": {
+                "student_id": "E5",
+                "exam_id": "EX11"
+            },
+            "field": "nota",
+            "current_value": 23,
+            "expected_constraint": "0 <= nota <= 20",
+            "suggested_repairs": [
+                {
+                    "action": "modify",
+                    "field": "nota",
+                    "new_value": 20,
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_5",
+            "type": "age_birth_mismatch",
+            "entity_type": "student",
+            "related_entities": {
+                "student_id": "E0"
+            },
+            "field": "edad",
+            "current_value": 20,
+            "expected_constraint": "edad should be approximately 18",
+            "suggested_repairs": [
+                {
+                    "action": "modify",
+                    "field": "edad",
+                    "new_value": 18,
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_6",
+            "type": "age_birth_mismatch",
+            "entity_type": "student",
+            "related_entities": {
+                "student_id": "E7"
+            },
+            "field": "edad",
+            "current_value": 12,
+            "expected_constraint": "edad should be approximately 15",
+            "suggested_repairs": [
+                {
+                    "action": "modify",
+                    "field": "edad",
+                    "new_value": 15,
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_7",
+            "type": "invalid_professor_subject",
+            "severity": "high",
+            "entity_type": "exam",
+            "related_entities": {
+                "exam_id": "EX6",
+                "professor_id": "P2"
+            },
+            "field": "asignatura",
+            "current_value": "math",
+            "expected_constraint": "professor must teach subject",
+            "suggested_repairs": [
+                {
+                    "action": "modify_subject",
+                    "new_value": "history",
+                    "cost": 1
+                }
+            ]
+        },
+        {
+            "id": "INC_8",
+            "type": "invalid_professor_subject",
+            "severity": "high",
+            "entity_type": "exam",
+            "related_entities": {
+                "exam_id": "EX13",
+                "professor_id": "P0"
+            },
+            "field": "asignatura",
+            "current_value": "physics",
+            "expected_constraint": "professor must teach subject",
+            "suggested_repairs": [
+                {
+                    "action": "modify_subject",
+                    "new_value": "history",
+                    "cost": 1
+                }
+            ]
+        }
+    ]
+}
