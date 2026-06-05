@@ -3,108 +3,108 @@
         {
             "id": "E0",
             "nombre": "Student_0",
-            "edad": 20,
-            "fecha_nacimiento": "2008-02-06",
-            "curso": "highschool",
-            "asistencia": 100,
-            "creditos": 16
+            "edad": 15,
+            "fecha_nacimiento": "2008-06-10",
+            "curso": "secondary",
+            "asistencia": 68,
+            "creditos": 11
         },
         {
             "id": "E1",
             "nombre": "Student_1",
-            "edad": 20,
-            "fecha_nacimiento": "2006-04-18",
-            "curso": "highschool",
-            "asistencia": 62,
-            "creditos": 31
+            "edad": 21,
+            "fecha_nacimiento": "2005-11-21",
+            "curso": "secondary",
+            "asistencia": 72,
+            "creditos": 36
         },
         {
             "id": "E2",
             "nombre": "Student_2",
-            "edad": 18,
-            "fecha_nacimiento": "2008-12-29",
-            "curso": "primary",
-            "asistencia": 73,
+            "edad": 14,
+            "fecha_nacimiento": "2012-02-17",
+            "curso": "highschool",
+            "asistencia": 82,
             "creditos": 27
         },
         {
             "id": "E3",
             "nombre": "Student_3",
-            "edad": 21,
-            "fecha_nacimiento": "2005-12-27",
-            "curso": "secondary",
-            "asistencia": 75,
-            "creditos": 29
+            "edad": 15,
+            "fecha_nacimiento": "2011-06-15",
+            "curso": "primary",
+            "asistencia": 64,
+            "creditos": 36
         },
         {
             "id": "E4",
             "nombre": "Student_4",
             "edad": 21,
-            "fecha_nacimiento": "2005-02-26",
+            "fecha_nacimiento": "2005-05-21",
             "curso": "highschool",
-            "asistencia": 79,
-            "creditos": 13
+            "asistencia": 61,
+            "creditos": 36
         },
         {
             "id": "E5",
             "nombre": "Student_5",
-            "edad": 14,
-            "fecha_nacimiento": "2012-11-28",
+            "edad": 19,
+            "fecha_nacimiento": "2007-08-09",
             "curso": "secondary",
-            "asistencia": 79,
-            "creditos": 22
+            "asistencia": 97,
+            "creditos": 26
         },
         {
             "id": "E6",
             "nombre": "Student_6",
-            "edad": 16,
-            "fecha_nacimiento": "2010-05-20",
-            "curso": "highschool",
-            "asistencia": 84,
-            "creditos": 13
+            "edad": 14,
+            "fecha_nacimiento": "2012-09-30",
+            "curso": "secondary",
+            "asistencia": 68,
+            "creditos": 30
         },
         {
             "id": "E7",
             "nombre": "Student_7",
-            "edad": 12,
-            "fecha_nacimiento": "2011-03-11",
-            "curso": "highschool",
-            "asistencia": 72,
-            "creditos": 12
+            "edad": 20,
+            "fecha_nacimiento": "2006-03-26",
+            "curso": "secondary",
+            "asistencia": 100,
+            "creditos": 15
         },
         {
             "id": "E8",
             "nombre": "Student_8",
-            "edad": 19,
-            "fecha_nacimiento": "2007-05-13",
+            "edad": 20,
+            "fecha_nacimiento": "2006-09-30",
             "curso": "primary",
-            "asistencia": 70,
-            "creditos": 28
+            "asistencia": 71,
+            "creditos": 17
         },
         {
             "id": "E9",
             "nombre": "Student_9",
-            "edad": 20,
-            "fecha_nacimiento": "2006-12-30",
+            "edad": 15,
+            "fecha_nacimiento": "2011-07-26",
             "curso": "highschool",
-            "asistencia": 83,
-            "creditos": 17
+            "asistencia": 100,
+            "creditos": 39
         }
     ],
     "professors": [
         {
             "id": "P0",
             "nombre": "Professor_0",
-            "edad": 42,
+            "edad": 45,
             "asignaturas": [
-                "history",
-                "biology"
+                "biology",
+                "history"
             ]
         },
         {
             "id": "P1",
             "nombre": "Professor_1",
-            "edad": 57,
+            "edad": 49,
             "asignaturas": [
                 "math",
                 "history"
@@ -113,10 +113,10 @@
         {
             "id": "P2",
             "nombre": "Professor_2",
-            "edad": 54,
+            "edad": 37,
             "asignaturas": [
-                "history",
-                "physics"
+                "physics",
+                "biology"
             ]
         }
     ],
@@ -124,52 +124,52 @@
         {
             "id": "EX0",
             "asignatura": "physics",
-            "profesor_id": "P2"
+            "profesor_id": "P1"
         },
         {
             "id": "EX1",
-            "asignatura": "biology",
-            "profesor_id": "P0"
+            "asignatura": "physics",
+            "profesor_id": "P2"
         },
         {
             "id": "EX2",
             "asignatura": "history",
-            "profesor_id": "P1"
+            "profesor_id": "P0"
         },
         {
             "id": "EX3",
-            "asignatura": "math",
+            "asignatura": "history",
             "profesor_id": "P1"
         },
         {
             "id": "EX4",
-            "asignatura": "history",
+            "asignatura": "biology",
             "profesor_id": "P0"
         },
         {
             "id": "EX5",
-            "asignatura": "physics",
-            "profesor_id": "P2"
+            "asignatura": "history",
+            "profesor_id": "P0"
         },
         {
             "id": "EX6",
-            "asignatura": "math",
-            "profesor_id": "P2"
+            "asignatura": "biology",
+            "profesor_id": "P0"
         },
         {
             "id": "EX7",
-            "asignatura": "history",
-            "profesor_id": "P0"
+            "asignatura": "physics",
+            "profesor_id": "P1"
         },
         {
             "id": "EX8",
-            "asignatura": "physics",
-            "profesor_id": "P2"
+            "asignatura": "history",
+            "profesor_id": "P1"
         },
         {
             "id": "EX9",
-            "asignatura": "history",
-            "profesor_id": "P0"
+            "asignatura": "math",
+            "profesor_id": "P1"
         },
         {
             "id": "EX10",
@@ -178,30 +178,120 @@
         },
         {
             "id": "EX11",
-            "asignatura": "biology",
+            "asignatura": "history",
             "profesor_id": "P0"
         },
         {
             "id": "EX12",
-            "asignatura": "history",
+            "asignatura": "biology",
             "profesor_id": "P0"
         },
         {
             "id": "EX13",
-            "asignatura": "physics",
-            "profesor_id": "P0"
+            "asignatura": "biology",
+            "profesor_id": "P1"
         },
         {
             "id": "EX14",
-            "asignatura": "history",
+            "asignatura": "physics",
             "profesor_id": "P2"
         }
     ],
     "results": [
         {
-            "examen_id": "EX8",
+            "examen_id": "EX3",
+            "estudiante_id": "E4",
+            "nota": 13
+        },
+        {
+            "examen_id": "EX3",
+            "estudiante_id": "E3",
+            "nota": 18
+        },
+        {
+            "examen_id": "EX4",
+            "estudiante_id": "E11",
+            "nota": 24
+        },
+        {
+            "examen_id": "EX11",
+            "estudiante_id": "E1",
+            "nota": 20
+        },
+        {
+            "examen_id": "EX0",
+            "estudiante_id": "E3",
+            "nota": 12
+        },
+        {
+            "examen_id": "EX0",
+            "estudiante_id": "E7",
+            "nota": 14
+        },
+        {
+            "examen_id": "EX2",
+            "estudiante_id": "E4",
+            "nota": 3
+        },
+        {
+            "examen_id": "EX5",
+            "estudiante_id": "E3",
+            "nota": 16
+        },
+        {
+            "examen_id": "EX0",
+            "estudiante_id": "E15",
+            "nota": 10
+        },
+        {
+            "examen_id": "EX9",
             "estudiante_id": "E9",
             "nota": 18
+        },
+        {
+            "examen_id": "EX3",
+            "estudiante_id": "E6",
+            "nota": 11
+        },
+        {
+            "examen_id": "EX6",
+            "estudiante_id": "E2",
+            "nota": 21
+        },
+        {
+            "examen_id": "EX3",
+            "estudiante_id": "E2",
+            "nota": 25
+        },
+        {
+            "examen_id": "EX0",
+            "estudiante_id": "E6",
+            "nota": 16
+        },
+        {
+            "examen_id": "EX10",
+            "estudiante_id": "E4",
+            "nota": 20
+        },
+        {
+            "examen_id": "EX13",
+            "estudiante_id": "E2",
+            "nota": 18
+        },
+        {
+            "examen_id": "EX0",
+            "estudiante_id": "E0",
+            "nota": 8
+        },
+        {
+            "examen_id": "EX16",
+            "estudiante_id": "E4",
+            "nota": 5
+        },
+        {
+            "examen_id": "EX9",
+            "estudiante_id": "E1",
+            "nota": 19
         },
         {
             "examen_id": "EX4",
@@ -209,194 +299,259 @@
             "nota": 20
         },
         {
-            "examen_id": "EX8",
-            "estudiante_id": "E5",
-            "nota": 18
-        },
-        {
-            "examen_id": "EX14",
-            "estudiante_id": "E0",
-            "nota": 13
-        },
-        {
-            "examen_id": "EX2",
-            "estudiante_id": "E9",
-            "nota": 23
-        },
-        {
-            "examen_id": "EX9",
-            "estudiante_id": "E8",
-            "nota": 10
-        },
-        {
-            "examen_id": "EX14",
-            "estudiante_id": "E1",
-            "nota": 15
-        },
-        {
-            "examen_id": "EX12",
-            "estudiante_id": "E8",
+            "examen_id": "EX1",
+            "estudiante_id": "E2",
             "nota": 17
         },
         {
-            "examen_id": "EX2",
+            "examen_id": "EX6",
+            "estudiante_id": "E13",
+            "nota": 11
+        },
+        {
+            "examen_id": "EX11",
+            "estudiante_id": "E2",
+            "nota": 13
+        },
+        {
+            "examen_id": "EX5",
             "estudiante_id": "E7",
-            "nota": 0
-        },
-        {
-            "examen_id": "EX9",
-            "estudiante_id": "E6",
-            "nota": 19
-        },
-        {
-            "examen_id": "EX14",
-            "estudiante_id": "E1",
-            "nota": 15
-        },
-        {
-            "examen_id": "EX8",
-            "estudiante_id": "E9",
-            "nota": 18
-        },
-        {
-            "examen_id": "EX3",
-            "estudiante_id": "E6",
-            "nota": 24
+            "nota": 7
         },
         {
             "examen_id": "EX1",
-            "estudiante_id": "E0",
-            "nota": 23
-        },
-        {
-            "examen_id": "EX11",
-            "estudiante_id": "E7",
-            "nota": 13
-        },
-        {
-            "examen_id": "EX3",
-            "estudiante_id": "E6",
-            "nota": 10
-        },
-        {
-            "examen_id": "EX2",
-            "estudiante_id": "E9",
-            "nota": 14
-        },
-        {
-            "examen_id": "EX9",
-            "estudiante_id": "E0",
-            "nota": 13
-        },
-        {
-            "examen_id": "EX6",
-            "estudiante_id": "E11",
-            "nota": 20
-        },
-        {
-            "examen_id": "EX14",
-            "estudiante_id": "E4",
-            "nota": 15
-        },
-        {
-            "examen_id": "EX18",
-            "estudiante_id": "E8",
-            "nota": 11
-        },
-        {
-            "examen_id": "EX0",
-            "estudiante_id": "E3",
-            "nota": 11
-        },
-        {
-            "examen_id": "EX19",
-            "estudiante_id": "E3",
-            "nota": 24
-        },
-        {
-            "examen_id": "EX14",
-            "estudiante_id": "E3",
-            "nota": 16
-        },
-        {
-            "examen_id": "EX11",
-            "estudiante_id": "E5",
-            "nota": 23
-        },
-        {
-            "examen_id": "EX0",
-            "estudiante_id": "E1",
-            "nota": 11
-        },
-        {
-            "examen_id": "EX14",
             "estudiante_id": "E7",
             "nota": 16
         },
         {
-            "examen_id": "EX12",
-            "estudiante_id": "E15",
-            "nota": 11
-        },
-        {
-            "examen_id": "EX6",
+            "examen_id": "EX1",
             "estudiante_id": "E8",
             "nota": 11
         },
         {
-            "examen_id": "EX1",
-            "estudiante_id": "E14",
+            "examen_id": "EX3",
+            "estudiante_id": "E6",
+            "nota": 15
+        },
+        {
+            "examen_id": "EX3",
+            "estudiante_id": "E7",
             "nota": 12
+        },
+        {
+            "examen_id": "EX1",
+            "estudiante_id": "E7",
+            "nota": 12
+        },
+        {
+            "examen_id": "EX7",
+            "estudiante_id": "E6",
+            "nota": 23
         }
     ],
     "regrades": [
         {
-            "examen_id": "EX9",
-            "estudiante_id": "E8",
-            "nota_final": 12,
-            "profesor_id": "P1"
-        },
-        {
-            "examen_id": "EX12",
-            "estudiante_id": "E8",
-            "nota_final": 20,
-            "profesor_id": "P1"
-        },
-        {
-            "examen_id": "EX14",
-            "estudiante_id": "E1",
-            "nota_final": 16,
-            "profesor_id": "P0"
-        },
-        {
-            "examen_id": "EX11",
-            "estudiante_id": "E7",
-            "nota_final": 11,
-            "profesor_id": "P0"
-        },
-        {
-            "examen_id": "EX3",
-            "estudiante_id": "E6",
-            "nota_final": 15,
-            "profesor_id": "P1"
-        },
-        {
-            "examen_id": "EX9",
-            "estudiante_id": "E0",
-            "nota_final": 18,
-            "profesor_id": "P0"
-        },
-        {
-            "examen_id": "EX14",
-            "estudiante_id": "E4",
-            "nota_final": 12,
+            "examen_id": "EX4",
+            "estudiante_id": "E11",
+            "nota_final": 21,
             "profesor_id": "P1"
         },
         {
             "examen_id": "EX0",
-            "estudiante_id": "E1",
-            "nota_final": 14,
+            "estudiante_id": "E7",
+            "nota_final": 9,
             "profesor_id": "P0"
+        },
+        {
+            "examen_id": "EX5",
+            "estudiante_id": "E3",
+            "nota_final": 14,
+            "profesor_id": "P1"
+        },
+        {
+            "examen_id": "EX6",
+            "estudiante_id": "E2",
+            "nota_final": 18,
+            "profesor_id": "P0"
+        },
+        {
+            "examen_id": "EX3",
+            "estudiante_id": "E2",
+            "nota_final": 20,
+            "profesor_id": "P0"
+        },
+        {
+            "examen_id": "EX0",
+            "estudiante_id": "E0",
+            "nota_final": 10,
+            "profesor_id": "P0"
+        },
+        {
+            "examen_id": "EX9",
+            "estudiante_id": "E1",
+            "nota_final": 20,
+            "profesor_id": "P1"
+        },
+        {
+            "examen_id": "EX4",
+            "estudiante_id": "E2",
+            "nota_final": 20,
+            "profesor_id": "P2"
+        },
+        {
+            "examen_id": "EX5",
+            "estudiante_id": "E7",
+            "nota_final": 4,
+            "profesor_id": "P2"
+        },
+        {
+            "examen_id": "EX1",
+            "estudiante_id": "E8",
+            "nota_final": 14,
+            "profesor_id": "P1"
+        },
+        {
+            "examen_id": "EX3",
+            "estudiante_id": "E6",
+            "nota_final": 16,
+            "profesor_id": "P2"
+        }
+    ],
+    "teacher_reports": [
+        {
+            "student_id": "E4",
+            "exam_id": "EX3",
+            "comment": "Excellent university-level research skills."
+        },
+        {
+            "student_id": "E3",
+            "exam_id": "EX3",
+            "comment": "Excellent participation in class."
+        },
+        {
+            "student_id": "E1",
+            "exam_id": "EX11",
+            "comment": "Consistent academic performance."
+        },
+        {
+            "student_id": "E3",
+            "exam_id": "EX0",
+            "comment": "Outstanding compiler optimization techniques."
+        },
+        {
+            "student_id": "E7",
+            "exam_id": "EX0",
+            "comment": "Consistent academic performance."
+        },
+        {
+            "student_id": "E4",
+            "exam_id": "EX2",
+            "comment": "Unable to solve elementary exercises."
+        },
+        {
+            "student_id": "E3",
+            "exam_id": "EX5",
+            "comment": "Shows strong understanding of the subject."
+        },
+        {
+            "student_id": "E9",
+            "exam_id": "EX9",
+            "comment": "Demonstrates critical thinking skills."
+        },
+        {
+            "student_id": "E6",
+            "exam_id": "EX3",
+            "comment": "Very poor performance throughout the semester."
+        },
+        {
+            "student_id": "E2",
+            "exam_id": "EX6",
+            "comment": "Shows strong understanding of the subject."
+        },
+        {
+            "student_id": "E2",
+            "exam_id": "EX3",
+            "comment": "Very poor performance throughout the semester."
+        },
+        {
+            "student_id": "E6",
+            "exam_id": "EX0",
+            "comment": "Shows strong understanding of the subject."
+        },
+        {
+            "student_id": "E4",
+            "exam_id": "EX10",
+            "comment": "Demonstrates critical thinking skills."
+        },
+        {
+            "student_id": "E2",
+            "exam_id": "EX13",
+            "comment": "Very poor performance throughout the semester."
+        },
+        {
+            "student_id": "E0",
+            "exam_id": "EX0",
+            "comment": "Exceptional knowledge of quantum mechanics."
+        },
+        {
+            "student_id": "E4",
+            "exam_id": "EX16",
+            "comment": "Student failed to understand basic concepts."
+        },
+        {
+            "student_id": "E1",
+            "exam_id": "EX9",
+            "comment": "Consistent academic performance."
+        },
+        {
+            "student_id": "E2",
+            "exam_id": "EX4",
+            "comment": "Excellent participation in class."
+        },
+        {
+            "student_id": "E2",
+            "exam_id": "EX1",
+            "comment": "Excellent attendance and punctuality."
+        },
+        {
+            "student_id": "E2",
+            "exam_id": "EX11",
+            "comment": "Student failed to understand basic concepts."
+        },
+        {
+            "student_id": "E7",
+            "exam_id": "EX5",
+            "comment": "Very poor performance throughout the semester."
+        },
+        {
+            "student_id": "E7",
+            "exam_id": "EX1",
+            "comment": "Shows strong understanding of the subject."
+        },
+        {
+            "student_id": "E8",
+            "exam_id": "EX1",
+            "comment": "Unable to solve elementary exercises."
+        },
+        {
+            "student_id": "E6",
+            "exam_id": "EX3",
+            "comment": "Shows strong understanding of the subject."
+        },
+        {
+            "student_id": "E7",
+            "exam_id": "EX3",
+            "comment": "Exceptional knowledge of quantum mechanics."
+        },
+        {
+            "student_id": "E7",
+            "exam_id": "EX1",
+            "comment": "Unable to solve elementary exercises."
+        },
+        {
+            "student_id": "E6",
+            "exam_id": "EX7",
+            "comment": "Consistent academic performance."
         }
     ]
 }

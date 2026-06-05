@@ -1,0 +1,26 @@
+# ── Generated files (do not commit) ──────────────────────────────────────────
+dataset.json
+repaired_dataset.json
+inconsistencies.json
+textual_inconsistencies.json
+repair_plan.json
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+
+# ── OS / editor ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
+.idea/
