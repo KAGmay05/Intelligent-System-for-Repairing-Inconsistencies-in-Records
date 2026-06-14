@@ -4,9 +4,9 @@ import random
 from datetime import datetime, timedelta
 from pathlib import Path
 
-# Output always goes to the project root, regardless of where the script is run from
-ROOT_DIR    = Path(__file__).resolve().parent.parent
-OUTPUT_PATH = ROOT_DIR / "dataset.json"
+# Output always goes to the data folder, regardless of where the script is run from
+DATA_DIR    = Path(__file__).resolve().parent
+OUTPUT_PATH = DATA_DIR / "dataset.json"
 
 # =============================================================
 # SCALE
@@ -50,7 +50,9 @@ N_GHOST_EXAM       = 3   # result references a non-existent exam ID
 N_PROF_MISMATCH    = 4   # exam assigned to a professor who does not teach that subject
 N_FUTURE_EXAM      = 3   # exam date set in the future (after 2026-06-05)
 N_DUPLICATE_RESULT = 3   # same (student_id, exam_id) pair appears more than once
+N_ORPHAN_REGRADE   = 3   # regrade without a matching base result
 N_TEXT_INCON       = 15  # teacher comment semantically inconsistent with grade/attendance
+N_WRONG_SUBJECT    = 4   # comment discusses a subject different from the exam's (GLOBAL: report ↔ exam)
 
 
 # =============================================================
@@ -122,6 +124,71 @@ COMMENTS_ATTENDANCE_LOW = [
 ]
 
 # =============================================================
+# PARAPHRASED COMMENT POOLS
+# -------------------------------------------------------------
+# Same MEANING as the canonical pools above, but worded with vocabulary that is
+# deliberately ABSENT from the keyword markers used by the rule-based detector
+# (detector/llm_detector.py).  A purely lexical detector cannot catch these, so
+# they are the cases where the LLM must do real semantic reasoning.  Each
+# injected textual inconsistency records whether it used "canonical" or
+# "paraphrased" wording, so evaluation can measure rule-vs-LLM behaviour per
+# phrasing class.
+# =============================================================
+PARA_POSITIVE = [
+    "Trabaja con soltura y sus entregas destacan por su calidad.",
+    "Asimila los contenidos con facilidad y aporta ideas valiosas en clase.",
+    "Va muy por delante de lo exigido y resuelve los ejercicios con holgura.",
+    "Maneja el temario con seguridad y muestra un esfuerzo sostenido.",
+    "Su evolución a lo largo del curso ha sido magnífica.",
+]
+
+PARA_NEGATIVE = [
+    "Su desempeño deja bastante que desear y arrastra carencias importantes.",
+    "Le cuesta seguir el hilo de la asignatura y los trabajos llegan incompletos.",
+    "Todavía está lejos de lo que se espera en este nivel.",
+    "Muestra lagunas considerables que conviene atender cuanto antes.",
+    "Le falta mucho para alcanzar un nivel aceptable en la materia.",
+]
+
+# Describes excellent attendance — injected when the REAL attendance is low.
+PARA_ATTENDANCE_HIGH = [
+    "Acudió a cada sesión sin excepción y siempre llegó a la hora.",
+    "Su constancia en el aula fue total durante todo el periodo.",
+    "No registró ni una sola falta en todo el trimestre.",
+]
+
+# Describes poor attendance — injected when the REAL attendance is high.
+PARA_ATTENDANCE_LOW = [
+    "Faltó a clase en numerosas ocasiones, lo que dificultó su seguimiento.",
+    "Estuvo ausente buena parte del trimestre.",
+    "Sus continuas inasistencias afectaron su evolución.",
+]
+
+PARA_DOCTORAL = [
+    "Defendió un estudio de nivel posgrado con un manejo experto de la materia.",
+    "Presentó un trabajo propio de un programa de máster, con notable rigor académico.",
+    "Elaboró una indagación de alto nivel comparable a la de un estudiante de carrera.",
+]
+
+# Probability that an injected textual inconsistency uses paraphrased wording
+# (the rest use canonical wording that the rule detector can catch).
+PARAPHRASE_PROBABILITY = 0.6
+
+# Subject-specific comments.  Used to inject GLOBAL inconsistencies: a comment that
+# clearly discusses one subject placed on an exam of a DIFFERENT subject (report ↔
+# exam contradiction).  This is invisible both to the keyword rules and to a local
+# per-report check that never sees the exam's subject — only an LLM that compares
+# the comment against the exam subject can catch it.
+SUBJECT_COMMENTS = {
+    "math":       "Resuelve ecuaciones y problemas de calculo con gran soltura.",
+    "physics":    "Comprende muy bien las leyes del movimiento, las fuerzas y la energia.",
+    "history":    "Analiza con rigor los procesos y acontecimientos historicos.",
+    "biology":    "Domina los conceptos de celulas, genetica y ecosistemas.",
+    "chemistry":  "Maneja con destreza las reacciones quimicas y la tabla periodica.",
+    "literature": "Destaca en el analisis de textos literarios y la expresion escrita.",
+}
+
+# =============================================================
 # UTILITIES
 # =============================================================
 
@@ -154,7 +221,18 @@ def unique_name(used: set, first_pool: list, last_pool: list) -> str:
 # GENERATORS
 # =============================================================
 
-def generate_students() -> list:
+def generate_students():
+    """Return (students, ground_truth) where ground_truth maps each student-level
+    inconsistency type to the exact list of student IDs that carry it.
+
+    Injections are made NON-cascading on purpose so that injected == actual:
+      - age-birth mismatch shifts the BIRTH DATE (not the stored age), keeping the
+        age inside the course range so it does not also trip course_age_mismatch;
+      - course-age mismatch resets credits into the NEW course's range so it does
+        not also trip credits_mismatch.
+    The three injected sets are disjoint, so each flagged student carries exactly
+    one injected inconsistency.
+    """
     students   = []
     used_names: set = set()
 
@@ -178,37 +256,52 @@ def generate_students() -> list:
             "biografia":        random.choice(BIOS),
         })
 
+    gt = {"age_birth_mismatch": [], "course_age_mismatch": [], "credits_mismatch": []}
+
     # --- Inject: age-birth mismatches ---
-    # stored 'edad' differs from (2026 - birth_year) by 3-5 years
+    # Shift the birth YEAR so (2026 - birth_year) differs from the stored edad by
+    # 3-5 years.  The stored edad is left untouched (still valid for the course).
     age_set = set(random.sample(range(NUM_STUDENTS), N_AGE_MISMATCH))
     for i in age_set:
-        students[i]["edad"] += random.choice([-5, -4, -3, 3, 4, 5])
+        s     = students[i]
+        delta = random.choice([-5, -4, -3, 3, 4, 5])
+        new_birth_year = 2026 - (s["edad"] + delta)
+        old = datetime.strptime(s["fecha_nacimiento"], "%Y-%m-%d")
+        try:
+            new_birth = old.replace(year=new_birth_year)
+        except ValueError:                       # Feb 29 → use 28
+            new_birth = old.replace(year=new_birth_year, day=28)
+        s["fecha_nacimiento"] = new_birth.strftime("%Y-%m-%d")
+        gt["age_birth_mismatch"].append(s["id"])
 
     # --- Inject: course-age mismatches ---
-    # assign a course clearly incompatible with the student's age
+    # Assign a course clearly incompatible with the student's age, then re-roll
+    # credits into the new course's valid range (so only course_age is broken).
     remaining = [i for i in range(NUM_STUDENTS) if i not in age_set]
     course_set = set(random.sample(remaining, N_COURSE_AGE))
     for i in course_set:
-        age = students[i]["edad"]
-        if age <= 11:
-            students[i]["curso"] = "highschool"   # child in highschool
-        else:
-            students[i]["curso"] = "primary"      # teenager/adult in primary
+        s   = students[i]
+        age = s["edad"]
+        s["curso"] = "highschool" if age <= 11 else "primary"
+        c_lo, c_hi = COURSE_CREDITS[s["curso"]]
+        s["creditos"] = random.randint(c_lo, c_hi)
+        gt["course_age_mismatch"].append(s["id"])
 
     # --- Inject: credits mismatches ---
-    # credits clearly outside the valid range for the student's course
+    # credits clearly outside the valid range for the student's (unchanged) course
     used_so_far = age_set | course_set
     remaining2  = [i for i in range(NUM_STUDENTS) if i not in used_so_far]
     cred_set    = set(random.sample(remaining2, N_CREDITS_MISMATCH))
     for i in cred_set:
-        course      = students[i]["curso"]
-        c_lo, c_hi  = COURSE_CREDITS[course]
+        s          = students[i]
+        c_lo, c_hi = COURSE_CREDITS[s["curso"]]
         if random.random() < 0.5:
-            students[i]["creditos"] = c_hi + random.randint(30, 60)   # too many
+            s["creditos"] = c_hi + random.randint(30, 60)            # too many
         else:
-            students[i]["creditos"] = max(0, c_lo - random.randint(10, 25))  # too few
+            s["creditos"] = max(0, c_lo - random.randint(10, 25))    # too few
+        gt["credits_mismatch"].append(s["id"])
 
-    return students
+    return students, gt
 
 
 def generate_professors() -> list:
@@ -227,9 +320,12 @@ def generate_professors() -> list:
     return professors
 
 
-def generate_exams(professors: list) -> tuple:
-    exams:      list = []
-    mismatched: set  = set()
+def generate_exams(professors: list):
+    """Return (exams, ground_truth) with the exact exam IDs carrying each
+    exam-level inconsistency.  Base exams use a subject the professor teaches and
+    a past date, so the only flagged exams are the injected ones."""
+    exams: list = []
+    gt = {"professor_subject_mismatch": [], "future_exam_date": []}
 
     future_idxs   = set(random.sample(range(NUM_EXAMS), N_FUTURE_EXAM))
     mismatch_idxs = set(random.sample(
@@ -246,10 +342,14 @@ def generate_exams(professors: list) -> tuple:
             others = [s for s in SUBJECTS if s not in prof["asignaturas"]]
             if others:
                 subject = random.choice(others)
-                mismatched.add(f"EX{i}")
+                gt["professor_subject_mismatch"].append(f"EX{i}")
 
         # Inject future exam date
-        date = random_date(2027, 2028) if i in future_idxs else random_date(2021, 2025)
+        if i in future_idxs:
+            date = random_date(2027, 2028)
+            gt["future_exam_date"].append(f"EX{i}")
+        else:
+            date = random_date(2021, 2025)
 
         exams.append({
             "id":          f"EX{i}",
@@ -259,21 +359,31 @@ def generate_exams(professors: list) -> tuple:
             "descripcion": f"Examen de {subject}.",
         })
 
-    return exams, mismatched
+    return exams, gt
 
 
-def generate_results(students: list, exams: list) -> list:
+def generate_results(students: list, exams: list):
+    """Return (results, ground_truth) with the exact result IDs carrying each
+    result-level inconsistency.
+
+    Base (student, exam) pairs are kept UNIQUE so the only duplicate results are
+    the injected ones — previously random collisions created real-but-unintended
+    duplicates that were unfairly counted as false positives."""
     student_ids = [s["id"] for s in students]
     exam_ids    = [e["id"] for e in exams]
     results: list = []
+    gt = {"invalid_grade": [], "ghost_student": [], "ghost_exam": [], "duplicate_result": []}
 
-    # --- Base: valid results ---
+    # --- Base: valid results with UNIQUE (student, exam) pairs ---
+    used_pairs: set = set()
     for _ in range(NUM_RESULTS):
-        results.append({
-            "estudiante_id": random.choice(student_ids),
-            "examen_id":     random.choice(exam_ids),
-            "nota":          random.randint(10, 20),
-        })
+        for _try in range(500):
+            sid = random.choice(student_ids)
+            eid = random.choice(exam_ids)
+            if (sid, eid) not in used_pairs:
+                used_pairs.add((sid, eid))
+                break
+        results.append({"estudiante_id": sid, "examen_id": eid, "nota": random.randint(10, 20)})
 
     # --- Inject: invalid grades (outside [0, 20]) ---
     grade_idxs = random.sample(range(NUM_RESULTS), N_INVALID_GRADE)
@@ -284,39 +394,53 @@ def generate_results(students: list, exams: list) -> list:
             results[idx]["nota"] = random.randint(-10, -1)  # negative
 
     # --- Inject: ghost students (reference non-existent student IDs) ---
+    ghost_student_idxs = []
     for j in range(N_GHOST_STUDENT):
         results.append({
             "estudiante_id": f"E{NUM_STUDENTS + j + 1}",
             "examen_id":     random.choice(exam_ids),
             "nota":          random.randint(10, 20),
         })
+        ghost_student_idxs.append(len(results) - 1)
 
     # --- Inject: ghost exams (reference non-existent exam IDs) ---
+    ghost_exam_idxs = []
     for j in range(N_GHOST_EXAM):
         results.append({
             "estudiante_id": random.choice(student_ids),
             "examen_id":     f"EX{NUM_EXAMS + j + 1}",
             "nota":          random.randint(10, 20),
         })
+        ghost_exam_idxs.append(len(results) - 1)
 
     # --- Inject: duplicate results (same student+exam pair) ---
     clean_pool  = [r for r in results[:NUM_RESULTS] if 0 <= r["nota"] <= 20]
     dup_sources = random.sample(clean_pool, min(N_DUPLICATE_RESULT, len(clean_pool)))
+    dup_idxs = []
     for r in dup_sources:
         results.append({
             "estudiante_id": r["estudiante_id"],
             "examen_id":     r["examen_id"],
             "nota":          random.randint(10, 20),  # may differ from original
         })
+        dup_idxs.append(len(results) - 1)
 
-    # Add sequential result IDs
+    # Add sequential result IDs, then record ground truth by ID
     for i, r in enumerate(results):
         r["id"] = f"R{i}"
 
-    return results
+    gt["invalid_grade"]     = [results[idx]["id"] for idx in grade_idxs]
+    gt["ghost_student"]     = [results[idx]["id"] for idx in ghost_student_idxs]
+    gt["ghost_exam"]        = [results[idx]["id"] for idx in ghost_exam_idxs]
+    gt["duplicate_result"]  = [results[idx]["id"] for idx in dup_idxs]
+
+    return results, gt
 
 
-def generate_regrades(results: list, professors: list, students: list, exams: list) -> list:
+def generate_regrades(results: list, professors: list, students: list, exams: list):
+    """Return (regrades, ground_truth).  Orphan regrades are identified by the
+    "student_id|exam_id" key (regrades have no own ID).  Regular regrades always
+    reference an existing base result, so the only orphans are the injected ones."""
     valid_student_ids = {s["id"] for s in students}
     valid_exam_ids    = {e["id"] for e in exams}
 
@@ -326,6 +450,7 @@ def generate_regrades(results: list, professors: list, students: list, exams: li
                 and r["examen_id"] in valid_exam_ids
                 and 0 <= r["nota"] <= 20]
     regrades = []
+    gt = {"orphan_regrade": []}
 
     for r in random.sample(pool, min(NUM_REGRADES, len(pool))):
         prof = random.choice(professors)
@@ -336,23 +461,104 @@ def generate_regrades(results: list, professors: list, students: list, exams: li
             "profesor_id":   prof["id"],
         })
 
-    return regrades
+    # --- Inject: orphan regrades (no matching base result) ---
+    result_pairs = {(r["estudiante_id"], r["examen_id"]) for r in results}
+    student_ids  = [s["id"] for s in students]
+    exam_ids     = [e["id"] for e in exams]
+    for _ in range(N_ORPHAN_REGRADE):
+        # Keep trying until we find a pair that has no base result
+        for _attempt in range(200):
+            sid = random.choice(student_ids)
+            eid = random.choice(exam_ids)
+            if (sid, eid) not in result_pairs:
+                regrades.append({
+                    "examen_id":     eid,
+                    "estudiante_id": sid,
+                    "nota_final":    random.randint(10, 20),
+                    "profesor_id":   random.choice(professors)["id"],
+                })
+                result_pairs.add((sid, eid))  # avoid injecting same pair twice
+                gt["orphan_regrade"].append(f"{sid}|{eid}")
+                break
+
+    return regrades, gt
 
 
-def generate_teacher_reports(students: list, results: list) -> list:
-    student_map = {s["id"]: s for s in students}
+def _build_inconsistent_comment(typ: str, phrasing: str) -> str:
+    """Return a comment of the given inconsistency `typ`.
+
+    phrasing="canonical"   → wording the rule-based detector can match (keywords).
+    phrasing="paraphrased" → semantically equivalent wording with vocabulary that
+                             is NOT in the detector's markers (only an LLM that
+                             reasons about meaning can catch it).
+    """
+    canonical = phrasing == "canonical"
+
+    if typ == "negative_with_high_grade":
+        return random.choice(COMMENTS_NEGATIVE if canonical else PARA_NEGATIVE)
+    if typ == "positive_with_low_grade":
+        return random.choice(COMMENTS_POSITIVE if canonical else PARA_POSITIVE)
+    if typ == "low_attendance_comment":      # real attendance high, comment claims absences
+        return random.choice(COMMENTS_ATTENDANCE_LOW if canonical else PARA_ATTENDANCE_LOW)
+    if typ == "high_attendance_comment":     # real attendance low, comment claims perfect attendance
+        return random.choice(COMMENTS_ATTENDANCE_HIGH if canonical else PARA_ATTENDANCE_HIGH)
+    if typ == "doctoral_comment_young_student":
+        if canonical:
+            return (
+                "El alumno presentó un trabajo de investigación doctoral de alto nivel, "
+                "demostrando un dominio muy avanzado de la materia."
+            )
+        return random.choice(PARA_DOCTORAL)
+    # contradictory: praise + criticism in the same comment
+    if canonical:
+        return (
+            f"{random.choice(COMMENTS_POSITIVE)} "
+            f"Sin embargo, {random.choice(COMMENTS_NEGATIVE).lower()}"
+        )
+    return (
+        f"{random.choice(PARA_POSITIVE)} "
+        f"Aun así, {random.choice(PARA_NEGATIVE).lower()}"
+    )
+
+
+def generate_teacher_reports(students: list, results: list, exams: list):
+    """Return (reports, textual_ground_truth).
+
+    textual_ground_truth: one entry per injected inconsistent report —
+        {report_id, student_id, exam_id, type, phrasing}
+    so evaluation can match detections by ID (not just by count) and break the
+    rule-vs-LLM comparison down by phrasing class.
+
+    Two families of textual inconsistency are injected:
+      - LOCAL  (phrasing canonical/paraphrased): comment contradicts the student's
+        own grade / attendance / age.
+      - GLOBAL (phrasing "global"): comment discusses a subject different from the
+        exam's — a report ↔ exam contradiction only visible by cross-checking
+        elements of the history.
+    """
+    student_map  = {s["id"]: s for s in students}
+    exam_subject = {e["id"]: e.get("asignatura") for e in exams}
 
     # Reports are only generated for results with existing students
     valid_results = [r for r in results if r["estudiante_id"] in student_map]
+    n = len(valid_results)
 
-    # Deterministically choose which reports will have textual inconsistencies
-    incon_idxs = set(random.sample(
-        range(len(valid_results)),
-        min(N_TEXT_INCON, len(valid_results)),
-    ))
+    # Deterministically choose which reports get a LOCAL textual inconsistency
+    incon_idxs = set(random.sample(range(n), min(N_TEXT_INCON, n)))
+
+    # GLOBAL (wrong-subject) inconsistencies go on OTHER reports whose exam has a
+    # known subject, so injected == actual and the sets stay disjoint.
+    wrong_subject_eligible = [
+        i for i in range(n)
+        if i not in incon_idxs and valid_results[i]["examen_id"] in exam_subject
+    ]
+    random.shuffle(wrong_subject_eligible)
+    wrong_subject_idxs = set(wrong_subject_eligible[:N_WRONG_SUBJECT])
 
     reports = []
+    textual_gt = []
     for i, result in enumerate(valid_results):
+        report_id  = f"TR{i}"
         student    = student_map[result["estudiante_id"]]
         grade      = result["nota"]
         attendance = student.get("asistencia", 80)
@@ -374,26 +580,31 @@ def generate_teacher_reports(students: list, results: list) -> list:
             if age <= 12:
                 options.append("doctoral_comment_young_student")
 
-            typ = random.choice(options)
+            typ      = random.choice(options)
+            phrasing = "paraphrased" if random.random() < PARAPHRASE_PROBABILITY else "canonical"
+            comment  = _build_inconsistent_comment(typ, phrasing)
 
-            if typ == "negative_with_high_grade":
-                comment = random.choice(COMMENTS_NEGATIVE)
-            elif typ == "positive_with_low_grade":
-                comment = random.choice(COMMENTS_POSITIVE)
-            elif typ == "low_attendance_comment":
-                comment = random.choice(COMMENTS_ATTENDANCE_LOW)
-            elif typ == "high_attendance_comment":
-                comment = random.choice(COMMENTS_ATTENDANCE_HIGH)
-            elif typ == "doctoral_comment_young_student":
-                comment = (
-                    "El alumno presentó un trabajo de investigación doctoral de alto nivel, "
-                    "demostrando un dominio muy avanzado de la materia."
-                )
-            else:  # contradictory
-                comment = (
-                    f"{random.choice(COMMENTS_POSITIVE)} "
-                    f"Sin embargo, {random.choice(COMMENTS_NEGATIVE).lower()}"
-                )
+            textual_gt.append({
+                "report_id":  report_id,
+                "student_id": result["estudiante_id"],
+                "exam_id":    result["examen_id"],
+                "type":       typ,
+                "phrasing":   phrasing,
+            })
+
+        elif i in wrong_subject_idxs:
+            # GLOBAL: comment about a subject different from the exam's actual one.
+            actual_subject = exam_subject[result["examen_id"]]
+            wrong_choices  = [s for s in SUBJECT_COMMENTS if s != actual_subject]
+            wrong_subject  = random.choice(wrong_choices)
+            comment = SUBJECT_COMMENTS[wrong_subject]
+            textual_gt.append({
+                "report_id":  report_id,
+                "student_id": result["estudiante_id"],
+                "exam_id":    result["examen_id"],
+                "type":       "comentario_asignatura_incorrecta",
+                "phrasing":   "global",
+            })
 
         else:
             # Coherent comment based on actual grade
@@ -412,6 +623,7 @@ def generate_teacher_reports(students: list, results: list) -> list:
                 comment += " " + random.choice(COMMENTS_ATTENDANCE_LOW)
 
         reports.append({
+            "report_id":  report_id,
             "student_id": result["estudiante_id"],
             "exam_id":    result["examen_id"],
             "comment":    comment,
@@ -425,7 +637,7 @@ def generate_teacher_reports(students: list, results: list) -> list:
             },
         })
 
-    return reports
+    return reports, textual_gt
 
 # =============================================================
 # BUILD & EXPORT
@@ -434,12 +646,28 @@ def generate_teacher_reports(students: list, results: list) -> list:
 def build_dataset(seed: int) -> dict:
     random.seed(seed)
 
-    students   = generate_students()
-    professors = generate_professors()
-    exams, _mismatched = generate_exams(professors)
-    results    = generate_results(students, exams)
-    regrades   = generate_regrades(results, professors, students, exams)
-    reports    = generate_teacher_reports(students, results)
+    students,  gt_students = generate_students()
+    professors             = generate_professors()
+    exams,     gt_exams    = generate_exams(professors)
+    results,   gt_results  = generate_results(students, exams)
+    regrades,  gt_regrades = generate_regrades(results, professors, students, exams)
+    reports,   textual_gt  = generate_teacher_reports(students, results, exams)
+
+    # Structural ground truth BY ID: {type: [entity_id, ...]}.  Because injections
+    # are disjoint and non-cascading, this is the exact set of inconsistent
+    # entities, enabling instance-level (not just count-based) evaluation.
+    structural_gt = {**gt_students, **gt_exams, **gt_results, **gt_regrades}
+
+    # Counts derived from the ID lists so they are always exact.
+    counts_by_type = {k: len(v) for k, v in structural_gt.items()}
+    counts_by_type["textual_inconsistency"] = len(textual_gt)
+    counts_by_type["total"] = sum(counts_by_type.values())
+
+    phrasing_counts = {
+        "canonical":   sum(1 for g in textual_gt if g["phrasing"] == "canonical"),
+        "paraphrased": sum(1 for g in textual_gt if g["phrasing"] == "paraphrased"),
+        "global":      sum(1 for g in textual_gt if g["phrasing"] == "global"),
+    }
 
     return {
         "metadata": {
@@ -453,26 +681,15 @@ def build_dataset(seed: int) -> dict:
                 "regrades":        len(regrades),
                 "teacher_reports": len(reports),
             },
-            # Ground truth for evaluation: how many of each type were injected.
-            # The detector/repair pipeline should find at least these counts.
-            "injected_inconsistencies": {
-                "age_birth_mismatch":         N_AGE_MISMATCH,
-                "course_age_mismatch":        N_COURSE_AGE,
-                "credits_mismatch":           N_CREDITS_MISMATCH,
-                "invalid_grade":              N_INVALID_GRADE,
-                "ghost_student":              N_GHOST_STUDENT,
-                "ghost_exam":                 N_GHOST_EXAM,
-                "professor_subject_mismatch": N_PROF_MISMATCH,
-                "future_exam_date":           N_FUTURE_EXAM,
-                "duplicate_result":           N_DUPLICATE_RESULT,
-                "textual_inconsistency":      N_TEXT_INCON,
-                "total": (
-                    N_AGE_MISMATCH + N_COURSE_AGE + N_CREDITS_MISMATCH +
-                    N_INVALID_GRADE + N_GHOST_STUDENT + N_GHOST_EXAM +
-                    N_PROF_MISMATCH + N_FUTURE_EXAM + N_DUPLICATE_RESULT +
-                    N_TEXT_INCON
-                ),
-            },
+            # Count-based ground truth (kept for quick inspection / legacy tools).
+            "injected_inconsistencies": counts_by_type,
+            # Instance-level ground truth: exact entity IDs per structural type.
+            "structural_ground_truth": structural_gt,
+            # Per-instance ground truth for the textual detector: which reports
+            # are inconsistent, their type, and whether the wording is canonical
+            # (rule-catchable) or paraphrased (needs semantic reasoning).
+            "textual_ground_truth":   textual_gt,
+            "textual_phrasing_counts": phrasing_counts,
         },
         "students":        students,
         "professors":      professors,
@@ -511,4 +728,6 @@ if __name__ == "__main__":
     print("  Inconsistencias inyectadas:")
     for k, v in meta["injected_inconsistencies"].items():
         print(f"    {k:<32} {v}")
+    pc = meta["textual_phrasing_counts"]
+    print(f"  Redacción textual → canónica: {pc['canonical']}  parafraseada: {pc['paraphrased']}  global(asignatura): {pc['global']}")
     print(f"  Guardado en: {out}")

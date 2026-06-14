@@ -1,4 +1,14 @@
-# ── Generated files (do not commit) ──────────────────────────────────────────
+# ── Generated artifacts (do not commit) ──────────────────────────────────────
+# The ONLY source file under data/ is data/seed.py (the generator); every .json
+# and .log under data/ is produced by the pipeline/experiments and regenerates.
+data/*.json
+data/**/*.json
+data/**/*.log
+data/compare/
+data/instances/
+
+# Stray outputs if ever written at the repo root
+*.log
 dataset.json
 repaired_dataset.json
 inconsistencies.json
@@ -18,9 +28,10 @@ venv/
 env/
 .env
 
-# ── OS / editor ───────────────────────────────────────────────────────────────
+# ── OS / editor / tooling ─────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 *.swp
 .vscode/
 .idea/
+

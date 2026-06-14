@@ -6,8 +6,9 @@ from pathlib import Path
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DEFAULT_DATASET_PATH = BASE_DIR / "dataset.json"
-DEFAULT_OUTPUT_PATH = BASE_DIR / "inconsistencies.json"
+DATA_DIR = BASE_DIR / "data"
+DEFAULT_DATASET_PATH = DATA_DIR / "dataset.json"
+DEFAULT_OUTPUT_PATH = DATA_DIR / "inconsistencies.json"
 
 COURSE_AGE = {
     "primary": (6, 11),
@@ -282,6 +283,33 @@ def detect_duplicate_results(dataset):
     return issues
 
 
+def detect_orphan_regrades(dataset):
+    """Detect regrades that have no matching base result for the same (student, exam)."""
+    issues = []
+    result_pairs = {
+        (r.get("estudiante_id"), r.get("examen_id"))
+        for r in dataset.get("results", [])
+    }
+    for regrade in dataset.get("regrades", []):
+        sid = regrade.get("estudiante_id")
+        eid = regrade.get("examen_id")
+        if (sid, eid) in result_pairs:
+            continue
+        issues.append({
+            "type": "orphan_regrade",
+            "related_entities": {
+                "student_id": sid,
+                "exam_id":    eid,
+            },
+            "field": "estudiante_id",
+            "current_value": f"({sid}, {eid})",
+            "expected_constraint": "regrade must have a matching base result",
+            "suggested_repairs": [{"action": "delete_record", "cost": 4}],
+            "entity_type": "regrade",
+        })
+    return issues
+
+
 def detect_all_structural(dataset):
     detectors = [
         detect_invalid_grades,
@@ -293,6 +321,7 @@ def detect_all_structural(dataset):
         detect_ghost_students,
         detect_ghost_exams,
         detect_duplicate_results,
+        detect_orphan_regrades,
     ]
 
     raw_issues = []
@@ -315,9 +344,9 @@ def detect_all_structural(dataset):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Detect structural inconsistencies in dataset.json")
-    parser.add_argument("--dataset", type=str, default=str(DEFAULT_DATASET_PATH), help="Path to dataset JSON")
-    parser.add_argument("--output", type=str, default=str(DEFAULT_OUTPUT_PATH), help="Path to output inconsistencies JSON")
+    parser = argparse.ArgumentParser(description="Detect structural inconsistencies in data/dataset.json")
+    parser.add_argument("--dataset", type=str, default=str(DEFAULT_DATASET_PATH), help="Path to dataset JSON (default: data/dataset.json)")
+    parser.add_argument("--output", type=str, default=str(DEFAULT_OUTPUT_PATH), help="Path to output inconsistencies JSON (default: data/inconsistencies.json)")
     args = parser.parse_args()
 
     dataset_path = Path(args.dataset)

@@ -5,7 +5,7 @@ Minimum-cost repair planner for academic-record inconsistencies.
 
 Pipeline:
   1. detect_structural_issues()   → issues + repairs from hard rules
-  2. load_textual_issues()        → issues + repairs from textual_inconsistencies.json
+    2. load_textual_issues()        → issues + repairs from data/textual_inconsistencies.json
                                     (pre-computed by llm_detector.py)
   3. solve_minimum_repairs()      → CP-SAT weighted minimum hitting-set
   4. apply_repairs()              → produce repaired_dataset.json
@@ -26,19 +26,30 @@ globally cheapest solution.
 """
 import copy
 import json
+import math
 import os
+import random
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from ortools.sat.python import cp_model
 
+# Structural detector — reused to VERIFY global coherence on the repaired dataset.
+# Works both when this file is run as a script (python detector/repair_optimizer.py)
+# and when imported as a package module (from experiments/).
+try:
+    from detector.structural_rules import detect_all_structural
+except ImportError:  # running as a script: detector/ is on sys.path
+    from structural_rules import detect_all_structural
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATASET_PATH              = BASE_DIR / "dataset.json"
-TEXTUAL_ISSUES_PATH       = BASE_DIR / "textual_inconsistencies.json"
-OUTPUT_PLAN_PATH          = BASE_DIR / "repair_plan.json"
-OUTPUT_REPAIRED_PATH      = BASE_DIR / "repaired_dataset.json"
+DATA_DIR = BASE_DIR / "data"
+DATASET_PATH              = DATA_DIR / "dataset.json"
+TEXTUAL_ISSUES_PATH       = DATA_DIR / "textual_inconsistencies.json"
+OUTPUT_PLAN_PATH          = DATA_DIR / "repair_plan.json"
+OUTPUT_REPAIRED_PATH      = DATA_DIR / "repaired_dataset.json"
 
 COURSE_AGE = {
     "primary": (6, 11),
@@ -66,10 +77,11 @@ class RepairOption:
 # I/O
 # ─────────────────────────────────────────────
 
-def load_dataset() -> dict:
-    if not DATASET_PATH.exists():
-        raise FileNotFoundError(f"Dataset not found: {DATASET_PATH}")
-    with DATASET_PATH.open("r", encoding="utf-8") as fh:
+def load_dataset(path: Path | None = None) -> dict:
+    p = path or DATASET_PATH
+    if not p.exists():
+        raise FileNotFoundError(f"Dataset not found: {p}")
+    with p.open("r", encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -106,13 +118,29 @@ def detect_structural_issues(dataset: dict):
             expected_age = None
 
         if expected_age is not None and abs(expected_age - student["edad"]) > 1:
+            # Resolve the mismatch by correcting the BIRTH DATE to match the stored
+            # age, NOT the age.  The age participates in the course-age and credits
+            # constraints, so editing it can introduce a brand-new inconsistency
+            # (e.g. push the student out of their course's age range); the birth
+            # date participates in nothing else, so fixing it is side-effect free.
+            corrected_birth_year = datetime.now().year - student["edad"]
+            try:
+                old_birth = datetime.strptime(student["fecha_nacimiento"], "%Y-%m-%d")
+                try:
+                    new_birth = old_birth.replace(year=corrected_birth_year)
+                except ValueError:                       # Feb 29 → use 28
+                    new_birth = old_birth.replace(year=corrected_birth_year, day=28)
+                new_fecha = new_birth.strftime("%Y-%m-%d")
+            except (KeyError, ValueError):
+                new_fecha = f"{corrected_birth_year:04d}-01-01"
+
             rid = f"repair_student_age_{sid}"
             repairs[rid] = RepairOption(
                 repair_id=rid,
-                description=f"Ajustar edad de {sid} a {expected_age}",
+                description=f"Ajustar fecha de nacimiento de {sid} para coincidir con edad {student['edad']}",
                 cost=1,
                 action="modify_student",
-                target={"student_id": sid, "field": "edad", "new_value": expected_age},
+                target={"student_id": sid, "field": "fecha_nacimiento", "new_value": new_fecha},
             )
             issues.append({"issue_id": f"age_mismatch_{sid}",
                            "type": "age_birth_mismatch",
@@ -339,6 +367,30 @@ def detect_structural_issues(dataset: dict):
                     "repair_ids": [local_rid, root_repair_map[eid]],
                 })
 
+    # 11. Orphan regrades (no matching base result)
+    result_pairs = {
+        (r["estudiante_id"], r["examen_id"]) for r in dataset.get("results", [])
+    }
+    for regrade in dataset.get("regrades", []):
+        sid = regrade.get("estudiante_id")
+        eid = regrade.get("examen_id")
+        if (sid, eid) in result_pairs:
+            continue
+        rid = f"delete_orphan_regrade_{sid}_{eid}"
+        repairs[rid] = RepairOption(
+            repair_id=rid,
+            description=f"Eliminar recalificación huérfana de {sid} en {eid} (sin resultado base)",
+            cost=4,
+            action="delete_regrade",
+            target={"student_id": sid, "exam_id": eid},
+        )
+        issues.append({
+            "issue_id":   f"orphan_regrade_{sid}_{eid}",
+            "type":       "orphan_regrade",
+            "description": "Recalificación sin resultado base",
+            "repair_ids": [rid],
+        })
+
     return issues, repairs, root_repair_map
 
 
@@ -348,7 +400,7 @@ def detect_structural_issues(dataset: dict):
 
 def load_textual_issues(dataset: dict, root_repair_map: dict):
     """
-    Reads textual_inconsistencies.json (produced by llm_detector.py) and
+    Reads data/textual_inconsistencies.json (produced by llm_detector.py) and
     converts it to issues + repairs compatible with the CP-SAT solver.
 
     Crucially: if a textual report is tied to an exam that already has a
@@ -399,7 +451,11 @@ def load_textual_issues(dataset: dict, root_repair_map: dict):
         # If the issue is attendance-based, offer an attendance fix as alternative
         if issue_type == "asistencia_contradictoria":
             student  = students[student_id]
-            grade    = record.get("grade", 10)
+            grade    = record.get("grade")
+            if not isinstance(grade, (int, float)):
+                grade = 10
+            # A strong grade suggests the student did attend → raise attendance;
+            # otherwise the contradiction is resolved by lowering it.
             new_att  = 95 if grade >= 15 else 65
             att_rid  = f"repair_attendance_{student_id}_{exam_id}"
             repairs[att_rid] = RepairOption(
@@ -432,6 +488,78 @@ def load_textual_issues(dataset: dict, root_repair_map: dict):
 # CP-SAT MINIMUM-COST REPAIR SOLVER
 # ─────────────────────────────────────────────
 
+def _build_issue_decisions(issues: list, repairs: dict, selected_ids: set, reason_mode: str = "solver"):
+    """Build per-issue coverage + rationale from a selected repair set."""
+    covered_issues   = []
+    uncovered_issues = []
+    issue_decision_map: dict = {}
+
+    for issue in issues:
+        valid = [rid for rid in issue["repair_ids"] if rid in repairs]
+        unknowable = [rid for rid in issue["repair_ids"] if rid not in repairs]
+
+        chosen_rid = None
+        rejected   = []
+
+        if any(rid in selected_ids for rid in valid):
+            covered_issues.append(issue["issue_id"])
+            for rid in valid:
+                if rid in selected_ids:
+                    chosen_rid = rid
+                    break
+
+            for rid in valid:
+                if rid == chosen_rid:
+                    continue
+                if reason_mode == "solver":
+                    chosen_cost    = repairs[chosen_rid].cost
+                    candidate_cost = repairs[rid].cost
+                    if candidate_cost > chosen_cost:
+                        reason = "higher_cost"
+                    elif candidate_cost == chosen_cost:
+                        reason = "equivalent_cost_not_needed"
+                    else:
+                        reason = "lower_cost_but_not_needed"
+                else:
+                    reason = "not_selected_by_greedy"
+
+                rejected.append({
+                    "repair_id": rid,
+                    "description": repairs[rid].description,
+                    "cost": repairs[rid].cost,
+                    "reason": reason,
+                })
+
+            coverable          = True
+            uncoverable_reason = None
+        else:
+            uncovered_issues.append(issue["issue_id"])
+            coverable = False
+            if not valid and unknowable:
+                uncoverable_reason = (
+                    f"Todas las reparaciones candidatas ({', '.join(unknowable)}) "
+                    "no llegaron al solver (posible conflicto de IDs)."
+                )
+            elif not valid:
+                uncoverable_reason = "El issue no tiene reparaciones candidatas definidas."
+            else:
+                uncoverable_reason = (
+                    f"No se seleccionó ninguna candidata para el issue "
+                    f"({', '.join(valid)})."
+                )
+
+        issue_decision_map[issue["issue_id"]] = {
+            "issue_type": issue["type"],
+            "chosen": chosen_rid,
+            "chosen_cost": repairs[chosen_rid].cost if chosen_rid else None,
+            "rejected": rejected,
+            "coverable": coverable,
+            "uncoverable_reason": uncoverable_reason if not coverable else None,
+        }
+
+    return covered_issues, uncovered_issues, issue_decision_map
+
+
 def solve_minimum_repairs(issues: list, repairs: dict):
     """
     Weighted minimum hitting-set via CP-SAT.
@@ -439,7 +567,15 @@ def solve_minimum_repairs(issues: list, repairs: dict):
     For every issue at least one of its candidate repairs must be selected.
     The objective is to minimise the total cost of selected repairs.
 
-    Returns (selected_repairs, covered_issue_ids, uncovered_issue_ids).
+    Returns (selected_repairs, covered_issue_ids, uncovered_issue_ids,
+             issue_decision_map).
+
+    issue_decision_map: issue_id → {
+        "chosen":   repair_id | None,
+        "rejected": [{"repair_id", "cost", "reason"}],
+        "coverable": bool,
+        "uncoverable_reason": str | None,
+    }
     """
     model     = cp_model.CpModel()
     variables = {rid: model.NewBoolVar(rid) for rid in repairs}
@@ -469,17 +605,163 @@ def solve_minimum_repairs(issues: list, repairs: dict):
                 selected.append(repairs[rid])
                 selected_ids.add(rid)
 
-    # Compute coverage for the plan summary
-    covered_issues   = []
-    uncovered_issues = []
-    for issue in issues:
-        valid = [rid for rid in issue["repair_ids"] if rid in variables]
-        if any(rid in selected_ids for rid in valid):
-            covered_issues.append(issue["issue_id"])
-        else:
-            uncovered_issues.append(issue["issue_id"])
+    covered_issues, uncovered_issues, issue_decision_map = _build_issue_decisions(
+        issues, repairs, selected_ids, reason_mode="solver"
+    )
 
-    return selected, covered_issues, uncovered_issues
+    return selected, covered_issues, uncovered_issues, issue_decision_map
+
+
+def solve_minimum_repairs_greedy(issues: list, repairs: dict):
+    """
+    Greedy weighted set cover approximation:
+    picks the repair with best (newly_covered_issues / cost) ratio each step.
+    """
+    issue_to_valid: dict = {}
+    for issue in issues:
+        issue_to_valid[issue["issue_id"]] = [rid for rid in issue["repair_ids"] if rid in repairs]
+
+    uncovered = {
+        issue["issue_id"]
+        for issue in issues
+        if issue_to_valid.get(issue["issue_id"])
+    }
+
+    selected_ids: set = set()
+
+    while uncovered:
+        best_rid = None
+        best_score = -1.0
+        best_gain = -1
+        best_cost = 10**9
+
+        for rid, rep in repairs.items():
+            newly = 0
+            for issue in issues:
+                iid = issue["issue_id"]
+                if iid in uncovered and rid in issue_to_valid.get(iid, []):
+                    newly += 1
+            if newly == 0:
+                continue
+
+            score = newly / max(1, rep.cost)
+            if (
+                score > best_score
+                or (score == best_score and newly > best_gain)
+                or (score == best_score and newly == best_gain and rep.cost < best_cost)
+                or (score == best_score and newly == best_gain and rep.cost == best_cost and (best_rid is None or rid < best_rid))
+            ):
+                best_rid = rid
+                best_score = score
+                best_gain = newly
+                best_cost = rep.cost
+
+        if best_rid is None:
+            break
+
+        selected_ids.add(best_rid)
+
+        to_remove = []
+        for iid in uncovered:
+            if best_rid in issue_to_valid.get(iid, []):
+                to_remove.append(iid)
+        for iid in to_remove:
+            uncovered.remove(iid)
+
+    selected = [repairs[rid] for rid in selected_ids]
+    covered_issues, uncovered_issues, issue_decision_map = _build_issue_decisions(
+        issues, repairs, selected_ids, reason_mode="greedy"
+    )
+    return selected, covered_issues, uncovered_issues, issue_decision_map
+
+
+def solve_minimum_repairs_sa(
+    issues: list,
+    repairs: dict,
+    temp0: float = 25.0,
+    cooling: float = 0.995,
+    iters: int = 5000,
+    seed: int = 42,
+):
+    """
+    Simulated annealing for weighted set-cover style repair selection.
+    Objective:
+      total_cost + penalty_uncovered * uncovered_issues + 0.1 * num_selected_repairs
+    """
+    rng = random.Random(seed)
+    repair_ids = sorted(repairs.keys())
+
+    issue_to_valid: dict[str, list[str]] = {}
+    for issue in issues:
+        issue_to_valid[issue["issue_id"]] = [rid for rid in issue["repair_ids"] if rid in repairs]
+
+    max_cost = max((rep.cost for rep in repairs.values()), default=1)
+    penalty_uncovered = max(1000, len(repair_ids) * max_cost)
+
+    def _stats(selected_ids: set[str]):
+        uncovered_count = 0
+        for issue in issues:
+            valid = issue_to_valid.get(issue["issue_id"], [])
+            if valid and not any(rid in selected_ids for rid in valid):
+                uncovered_count += 1
+        total_cost = sum(repairs[rid].cost for rid in selected_ids)
+        objective = total_cost + penalty_uncovered * uncovered_count + 0.1 * len(selected_ids)
+        return objective, total_cost, uncovered_count
+
+    # Start from greedy solution for a strong warm-start.
+    greedy_selected, _, _, _ = solve_minimum_repairs_greedy(issues, repairs)
+    current_ids = {r.repair_id for r in greedy_selected}
+    if not current_ids and repair_ids:
+        current_ids.add(rng.choice(repair_ids))
+
+    current_obj, _, _ = _stats(current_ids)
+    best_ids = set(current_ids)
+    best_obj = current_obj
+
+    temp = max(1e-6, float(temp0))
+    n_iters = max(1, int(iters))
+    cool = min(0.9999, max(0.90, float(cooling)))
+
+    for _ in range(n_iters):
+        neighbor = set(current_ids)
+
+        if repair_ids:
+            if rng.random() < 0.65:
+                rid = rng.choice(repair_ids)
+                if rid in neighbor:
+                    neighbor.remove(rid)
+                else:
+                    neighbor.add(rid)
+            else:
+                issue = rng.choice(issues)
+                candidates = issue_to_valid.get(issue["issue_id"], [])
+                if candidates:
+                    rid = rng.choice(candidates)
+                    neighbor.add(rid)
+                    if len(neighbor) > 1 and rng.random() < 0.4:
+                        removable = [x for x in neighbor if x != rid]
+                        if removable:
+                            neighbor.remove(rng.choice(removable))
+
+        n_obj, _, _ = _stats(neighbor)
+        delta = n_obj - current_obj
+
+        if delta <= 0 or rng.random() < math.exp(-delta / max(temp, 1e-9)):
+            current_ids = neighbor
+            current_obj = n_obj
+            if n_obj < best_obj:
+                best_obj = n_obj
+                best_ids = set(neighbor)
+
+        temp *= cool
+        if temp < 1e-6:
+            temp = 1e-6
+
+    selected = [repairs[rid] for rid in sorted(best_ids)]
+    covered_issues, uncovered_issues, issue_decision_map = _build_issue_decisions(
+        issues, repairs, best_ids, reason_mode="greedy"
+    )
+    return selected, covered_issues, uncovered_issues, issue_decision_map
 
 
 # ─────────────────────────────────────────────
@@ -574,6 +856,13 @@ def apply_repairs(dataset: dict, selected_repairs: list) -> dict:
                 kept.append(rp)
             repaired["teacher_reports"] = kept
 
+        elif repair.action == "delete_regrade":
+            repaired["regrades"] = [
+                rg for rg in repaired.get("regrades", [])
+                if not (rg.get("estudiante_id") == t["student_id"]
+                        and rg.get("examen_id")    == t["exam_id"])
+            ]
+
         elif repair.action == "delete_report":
             repaired["teacher_reports"] = [
                 rp for rp in repaired.get("teacher_reports", [])
@@ -633,6 +922,42 @@ def _enforce_student_consistency(students: list) -> None:
 # ─────────────────────────────────────────────
 
 def main():
+    import argparse as _ap, os as _os
+    global DATASET_PATH, TEXTUAL_ISSUES_PATH, OUTPUT_PLAN_PATH, OUTPUT_REPAIRED_PATH
+    _parser = _ap.ArgumentParser(description="Repair optimizer — CP-SAT minimum-cost hitting set")
+    _parser.add_argument("--verbose", action="store_true",
+                         help="Mostrar tabla de decisiones del solver (elegida/rechazadas por issue)")
+    _parser.add_argument("--dataset",          default=None,
+                         help="Ruta al dataset JSON (override de DATA_DIR/dataset.json)")
+    _parser.add_argument("--textual",          default=None,
+                         help="Ruta a textual_inconsistencies.json (override)")
+    _parser.add_argument("--output-plan",      default=None,
+                         help="Ruta de salida para repair_plan.json (override)")
+    _parser.add_argument("--output-repaired",  default=None,
+                         help="Ruta de salida para repaired_dataset.json (override)")
+    _parser.add_argument("--optimizer", choices=["cpsat", "greedy", "sa"], default="cpsat",
+                         help="Método de optimización: cpsat (exacto), greedy (heurístico) o sa (recocido simulado)")
+    _parser.add_argument("--sa-temp0", type=float, default=25.0,
+                         help="Temperatura inicial para SA")
+    _parser.add_argument("--sa-cooling", type=float, default=0.995,
+                         help="Factor de enfriamiento para SA (0.90-0.9999)")
+    _parser.add_argument("--sa-iters", type=int, default=5000,
+                         help="Número de iteraciones de SA")
+    _parser.add_argument("--sa-seed", type=int, default=42,
+                         help="Semilla aleatoria para SA")
+    _args, _ = _parser.parse_known_args()
+    verbose = _args.verbose or _os.environ.get("VERBOSE", "").strip() == "1"
+
+    # Allow per-run path overrides (used by experiments/run_instances.py)
+    if _args.dataset:
+        DATASET_PATH = Path(_args.dataset)
+    if _args.textual:
+        TEXTUAL_ISSUES_PATH = Path(_args.textual)
+    if _args.output_plan:
+        OUTPUT_PLAN_PATH = Path(_args.output_plan)
+    if _args.output_repaired:
+        OUTPUT_REPAIRED_PATH = Path(_args.output_repaired)
+
     dataset = load_dataset()
 
     structural_issues, structural_repairs, root_repair_map = detect_structural_issues(dataset)
@@ -646,10 +971,35 @@ def main():
     print(f"  - textuales      : {len(textual_issues)}")
     print(f"Reparaciones candidatas: {len(all_repairs)}")
     print(f"Reparaciones raíz  : {len(root_repair_map)}")
-    print("Resolviendo con CP-SAT…")
+    if _args.optimizer == "greedy":
+        print("Resolviendo con Greedy set-cover (heurístico)…")
+        selected, covered, uncovered, issue_decisions = solve_minimum_repairs_greedy(all_issues, all_repairs)
+    elif _args.optimizer == "sa":
+        print("Resolviendo con Recocido Simulado (metaheurístico)…")
+        selected, covered, uncovered, issue_decisions = solve_minimum_repairs_sa(
+            all_issues,
+            all_repairs,
+            temp0=_args.sa_temp0,
+            cooling=_args.sa_cooling,
+            iters=_args.sa_iters,
+            seed=_args.sa_seed,
+        )
+    else:
+        print("Resolviendo con CP-SAT…")
+        selected, covered, uncovered, issue_decisions = solve_minimum_repairs(all_issues, all_repairs)
+    repaired_dataset                               = apply_repairs(dataset, selected)
 
-    selected, covered, uncovered = solve_minimum_repairs(all_issues, all_repairs)
-    repaired_dataset             = apply_repairs(dataset, selected)
+    # ── VERIFY global coherence ──────────────────────────────────────────────
+    # The objective covers the DETECTED issues, but the goal is GLOBAL coherence:
+    # the repaired dataset must contain no structural inconsistency at all — not
+    # even one accidentally introduced by a repair (a cascade).  We re-run the
+    # structural detector on the repaired dataset and treat any residual issue as
+    # a coherence failure.  This makes "global coherence restored" a proven,
+    # first-class property of the output rather than an assumption.
+    from collections import Counter as _Counter
+    residual = detect_all_structural(repaired_dataset)
+    residual_by_type = dict(sorted(_Counter(i["type"] for i in residual).items()))
+    global_coherence_verified = len(residual) == 0
 
     # ── Build audit trail: for each selected repair, list issues it covers ──
     selected_ids = {r.repair_id for r in selected}
@@ -660,6 +1010,26 @@ def main():
                 repair_audit[rid].append(issue["issue_id"])
                 break  # issue is covered; move on
 
+    # ── Build rejected_alternatives per selected repair ──────────────────────
+    # Gather all issues each repair covers so we can list what was competed against
+    repair_to_issues: dict = {}  # repair_id → [issue_ids it was candidate for]
+    for issue in all_issues:
+        for rid in issue["repair_ids"]:
+            repair_to_issues.setdefault(rid, []).append(issue["issue_id"])
+
+    def _rejected_for_repair(repair_id: str) -> list:
+        """For a selected repair, find sibling candidates that were NOT chosen."""
+        rejected_alts = []
+        my_issues = repair_to_issues.get(repair_id, [])
+        seen: set = set()
+        for iid in my_issues:
+            dec = issue_decisions.get(iid, {})
+            for alt in dec.get("rejected", []):
+                if alt["repair_id"] not in seen:
+                    seen.add(alt["repair_id"])
+                    rejected_alts.append(alt)
+        return rejected_alts
+
     # ── Count issues covered by root repairs specifically ───────────────────
     root_covered = sum(
         1 for issue in all_issues
@@ -667,36 +1037,82 @@ def main():
                for rid in issue["repair_ids"])
     )
 
-    # ── Summary by type ─────────────────────────────────────────────────────
-    from collections import Counter
+    # ── Cost breakdown by issue type ────────────────────────────────────────
+    from collections import Counter, defaultdict
     issues_by_type   = dict(Counter(i["type"] for i in all_issues))
     selected_by_type = dict(Counter(r.action for r in selected))
 
+    cost_by_type: dict = defaultdict(int)
+    for issue in all_issues:
+        dec = issue_decisions.get(issue["issue_id"], {})
+        if dec.get("chosen"):
+            cost_by_type[issue["type"]] += dec["chosen_cost"]
+
+    # ── Uncovered issues with explanation ───────────────────────────────────
+    uncovered_detail = [
+        {
+            "issue_id":  iid,
+            "issue_type": issue_decisions.get(iid, {}).get("issue_type", "unknown"),
+            "reason":    issue_decisions.get(iid, {}).get("uncoverable_reason", "unknown"),
+        }
+        for iid in uncovered
+    ]
+
     plan = {
         "generated_at": datetime.now().isoformat(),
+        "optimizer": _args.optimizer,
+        "optimizer_params": {
+            "sa_temp0": _args.sa_temp0,
+            "sa_cooling": _args.sa_cooling,
+            "sa_iters": _args.sa_iters,
+            "sa_seed": _args.sa_seed,
+        } if _args.optimizer == "sa" else {},
+        # Proof that the repairs restored GLOBAL coherence (re-detected on the
+        # repaired dataset): no residual structural inconsistencies, including none
+        # introduced as a side-effect of the repairs themselves.
+        "verification": {
+            "global_coherence_verified": global_coherence_verified,
+            "residual_structural_issues": len(residual),
+            "residual_by_type": residual_by_type,
+        },
         "summary": {
-            "total_issues":          len(all_issues),
-            "issues_by_type":        issues_by_type,
+            "total_issues":             len(all_issues),
+            "issues_by_type":           issues_by_type,
             "total_repairs_considered": len(all_repairs),
-            "repairs_selected":      len(selected),
-            "issues_covered":        len(covered),
-            "issues_uncovered":      len(uncovered),
-            "uncovered_issue_ids":   uncovered,
-            "total_cost":            sum(r.cost for r in selected),
-            "root_repairs_used":     sum(1 for r in selected if r.repair_id in root_repair_map.values()),
+            "repairs_selected":         len(selected),
+            "issues_covered":           len(covered),
+            "issues_uncovered":         len(uncovered),
+            "uncovered_issue_ids":      uncovered,
+            "total_cost":               sum(r.cost for r in selected),
+            "cost_by_issue_type":       dict(sorted(cost_by_type.items())),
+            "root_repairs_used":        sum(1 for r in selected if r.repair_id in root_repair_map.values()),
             "issues_resolved_by_root_repairs": root_covered,
             "selected_actions_by_type": selected_by_type,
         },
         "selected_repairs": [
             {
-                "repair_id":    r.repair_id,
-                "description":  r.description,
-                "cost":         r.cost,
-                "action":       r.action,
-                "target":       r.target,
-                "covers_issues": repair_audit.get(r.repair_id, []),
+                "repair_id":            r.repair_id,
+                "description":          r.description,
+                "cost":                 r.cost,
+                "action":               r.action,
+                "target":               r.target,
+                "covers_issues":        repair_audit.get(r.repair_id, []),
+                "rejected_alternatives": _rejected_for_repair(r.repair_id),
             }
             for r in selected
+        ],
+        "uncovered_issues":  uncovered_detail,
+        "issue_decisions":   [
+            {
+                "issue_id":           iid,
+                "issue_type":         dec["issue_type"],
+                "coverable":          dec["coverable"],
+                "chosen_repair":      dec["chosen"],
+                "chosen_cost":        dec["chosen_cost"],
+                "rejected_alternatives": dec["rejected"],
+                "uncoverable_reason": dec["uncoverable_reason"],
+            }
+            for iid, dec in issue_decisions.items()
         ],
         "ground_truth": dataset.get("metadata", {}).get("injected_inconsistencies"),
     }
@@ -707,14 +1123,55 @@ def main():
     with OUTPUT_REPAIRED_PATH.open("w", encoding="utf-8") as fh:
         json.dump(repaired_dataset, fh, indent=4, ensure_ascii=False)
 
-    print(f"\nResultados:")
-    print(f"  Issues totales      : {len(all_issues)}")
-    print(f"  Reparaciones elegidas: {len(selected)}")
-    print(f"  Issues cubiertos    : {len(covered)}")
-    print(f"  Issues sin cubrir   : {len(uncovered)}")
-    print(f"  Coste total         : {sum(r.cost for r in selected)}")
+    # ── Console output ───────────────────────────────────────────────────────
+    total_cost = sum(r.cost for r in selected)
     root_count = sum(1 for r in selected if r.repair_id in root_repair_map.values())
+
+    print(f"\nResultados:")
+    print(f"  Issues totales       : {len(all_issues)}")
+    print(f"  Reparaciones elegidas: {len(selected)}")
+    print(f"  Issues cubiertos     : {len(covered)}")
+    print(f"  Issues sin cubrir    : {len(uncovered)}")
+    print(f"  Coste total          : {total_cost}")
     print(f"  Reparaciones raíz usadas: {root_count}  (cubren cascada de issues)")
+    if global_coherence_verified:
+        print(f"  Coherencia global    : ✔ VERIFICADA (0 inconsistencias estructurales residuales)")
+    else:
+        print(f"  Coherencia global    : ✘ FALLÓ — {len(residual)} issues residuales: {residual_by_type}")
+        print(f"     (una reparación introdujo una inconsistencia nueva; revisar el modelo)")
+
+    # ── Coste por tipo de issue ──────────────────────────────────────────────
+    print(f"\n  Coste por tipo de issue:")
+    col = max((len(k) for k in cost_by_type), default=10) + 2
+    for itype in sorted(cost_by_type):
+        count = issues_by_type.get(itype, 0)
+        cost  = cost_by_type[itype]
+        avg   = cost / count if count else 0
+        print(f"    {itype:<{col}} issues={count:>3}  coste={cost:>4}  avg={avg:.1f}")
+
+    # ── Detalle por issue: reparación elegida vs alternativas rechazadas ────
+    if verbose:
+        print(f"\n  Decisiones del solver (elegida ✔ / rechazadas ✘):")
+        for issue in all_issues:
+            dec  = issue_decisions[issue["issue_id"]]
+            iid  = issue["issue_id"]
+            if dec["coverable"]:
+                chosen = all_repairs[dec["chosen"]]
+                print(f"    [{issue['type']}] {iid}")
+                print(f"      ✔ {chosen.repair_id}  coste={chosen.cost}  '{chosen.description}'")
+                for alt in dec["rejected"]:
+                    print(f"      ✘ {alt['repair_id']}  coste={alt['cost']}  razón={alt['reason']}  '{alt['description']}'")
+            else:
+                print(f"    [{issue['type']}] {iid}  ⚠ NO CUBIERTO")
+                print(f"      Causa: {dec['uncoverable_reason']}")
+    else:
+        # Always show uncovered issues even without --verbose
+        uncov_list = [d for d in issue_decisions.values() if not d["coverable"]]
+        if uncov_list:
+            print(f"\n  Issues NO cubiertos ({len(uncov_list)}):")
+            for d in uncov_list:
+                print(f"    [{d['issue_type']}]  Causa: {d['uncoverable_reason']}")
+
     print(f"\nPlan guardado en      : {OUTPUT_PLAN_PATH.name}")
     print(f"Dataset reparado en   : {OUTPUT_REPAIRED_PATH.name}")
 

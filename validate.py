@@ -10,7 +10,7 @@ Exit codes:
 
 Usage:
     python validate.py
-    python validate.py --repaired repaired_dataset.json
+    python validate.py --repaired data/repaired_dataset.json
 """
 
 import argparse
@@ -20,6 +20,7 @@ from collections import Counter
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
 
 # Import detector from the detector sub-package
 sys.path.insert(0, str(BASE_DIR / "detector"))
@@ -32,8 +33,8 @@ def main():
     )
     parser.add_argument(
         "--repaired",
-        default=str(BASE_DIR / "repaired_dataset.json"),
-        help="Ruta al dataset reparado (default: repaired_dataset.json)",
+        default=str(DATA_DIR / "repaired_dataset.json"),
+        help="Ruta al dataset reparado (default: data/repaired_dataset.json)",
     )
     args = parser.parse_args()
 
