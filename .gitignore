@@ -7,6 +7,10 @@ data/**/*.log
 data/compare/
 data/instances/
 
+# Documento generado desde INFORME.md (regenerar con make_pdf.py)
+INFORME.html
+
+
 # Stray outputs if ever written at the repo root
 *.log
 dataset.json
