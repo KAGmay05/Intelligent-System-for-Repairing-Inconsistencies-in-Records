@@ -1,4 +1,4 @@
-# Informe técnico — Sistema inteligente para reparar inconsistencias en registros
+# Informe técnico: Sistema inteligente para reparar inconsistencias en registros
 
 >  Los números provienen de la instancia principal (semilla `42`) salvo
 > la §7.3, que mide la robustez del LLM sobre 3 semillas (42, 123, 789). Todo es
@@ -10,9 +10,9 @@
 
 ## 1. Descripción del problema
 
-Dado un conjunto de hechos sobre registros académicos —unos estructurados
+Dado un conjunto de hechos sobre registros académicos, unos estructurados
 (estudiantes, profesores, exámenes, resultados, recalificaciones) y otros
-textuales (comentarios de los profesores)— que pueden contener
+textuales (comentarios de los profesores), que pueden contener
 contradicciones, el objetivo es encontrar un conjunto mínimo de
 modificaciones que restaure la coherencia global del historial.
 
@@ -61,7 +61,7 @@ Una inconsistencia es una instancia de restricción violada. Llamamos
 ### 2.2 Reparaciones
 
 Una reparación `ρ` es una modificación del dataset (cambiar un campo, eliminar
-un registro, etc.). Cada reparación tiene un costo `costo(ρ)` —un entero
+un registro, etc.). Cada reparación tiene un costo `costo(ρ)`, un entero
 positivo que modela el esfuerzo o riesgo de esa edición (p.ej. corregir una nota
 cuesta 1; eliminar un registro cuesta 5). Llamamos `REP` al conjunto de todas
 las reparaciones candidatas.
@@ -192,7 +192,7 @@ medir el valor del LLM:
   *sí* pueden cazar.
 - Parafraseada (11): misma contradicción semántica (nota↔comentario,
   asistencia↔comentario, edad↔comentario) pero con vocabulario ausente de los
-  markers — solo detectable razonando sobre el significado.
+  markers, solo detectable razonando sobre el significado.
 - Global (4): el comentario describe una asignatura distinta a la del
   examen (p.ej. "ecuaciones y cálculo" en un examen de física). Es una
   contradicción entre dos elementos del historial (reporte ↔ examen),
@@ -207,8 +207,7 @@ medir el valor del LLM:
   detección y reparación con rigor.
 - Las inconsistencias textuales están diseñadas para discriminar reglas vs
   LLM: la presencia de casos parafraseados y globales hace que un detector
-  puramente léxico fracase y que solo un evaluador semántico (LLM) los resuelva
-  — exactamente el escenario que la consigna exige evaluar.
+  puramente léxico fracase y que solo un evaluador semántico (LLM) los resuelva, exactamente el escenario que la consigna exige evaluar.
 - Las reparaciones se solapan (una reparación raíz cubre varias
   inconsistencias), lo que da sustancia al problema de optimización.
 
@@ -224,101 +223,38 @@ seed.py → structural_rules.py → llm_detector.py → repair_optimizer.py → 
 
 ### 4.1 Detección estructural (`detector/structural_rules.py`)
 
-Son diez detectores deterministas, uno por cada restricción dura. Cada detector
-es una función que recorre las entidades relevantes y evalúa un predicado
-booleano; si el predicado se viola, emite una inconsistencia con los IDs de las
-entidades implicadas, el campo afectado y una reparación sugerida. Por ejemplo:
-
-- *nota inválida*: recorre los resultados y comprueba `0 ≤ nota ≤ 20`.
-- *edad↔nacimiento*: para cada estudiante compara la edad almacenada con la que se
-  deduce del año de nacimiento (`año_actual − año_nacimiento`) y marca si difieren
-  en más de 1.
-- *estudiante/examen fantasma*: comprueba que el `estudiante_id` / `examen_id` de
-  cada resultado exista en el conjunto de estudiantes / exámenes.
-- *resultado duplicado*: detecta pares `(estudiante, examen)` repetidos usando un
-  conjunto de pares ya vistos.
-- *profesor↔asignatura*: comprueba que la asignatura del examen esté entre las que
-  imparte su profesor.
-
-Es exacto, lineal en el número de entidades y totalmente explicable (no hay
-aprendizaje ni azar): la salida es siempre la misma y se puede justificar regla a
-regla. Estas reglas son la *verdad de referencia* para lo verificable
-objetivamente; lo que no se puede verificar con una regla (la coherencia
-semántica del lenguaje) queda para el LLM.
+Diez detectores deterministas, uno por restricción dura. Cada inconsistencia
+detectada incluye las entidades implicadas y reparaciones sugeridas. Es exacto y
+explicable.
 
 ### 4.2 Detección textual (`detector/llm_detector.py`)
 
-Hay tres modos seleccionables con la variable `DETECTOR_MODE`:
+Tres modos seleccionables por `DETECTOR_MODE`:
 
-- `rule` (baseline por palabras clave). Para cada categoría de inconsistencia hay
-  una lista de frases-marcador; el detector comprueba si el comentario
-  contiene alguna de esas subcadenas y, combinándolo con condiciones numéricas
-  sobre la nota o la asistencia, decide. Es rápido y preciso con la redacción
-  literal, pero ciego a cualquier paráfrasis (si la frase no está en la lista,
-  no la ve) y a lo global (no mira la asignatura).
-- `llm` (el LLM es el juez semántico único). Para cada reporte se construye un
-  *prompt* con los hechos objetivos (edad, asistencia, curso, asignatura del
-  examen y nota) más el comentario y la definición de cada categoría. Se le da
-  el *significado* de las escalas (qué es una nota alta, qué es asistencia baja)
-  pero no los umbrales-regla, para que razone la coherencia. El prompt se
-  envía al modelo (gemma4) servido por Ollama vía HTTP (`format=json`,
-  `temperature=0` para que sea reproducible). El modelo devuelve un JSON con su
-  veredicto (`es_coherente`, `tipo_inconsistencia`, `comentario_reparado`); ese
-  veredicto es la detección y no se sobrescribe con reglas.
-- `hybrid` (reglas + LLM). Las reglas cazan lo obvio; los reportes que ellas
-  consideran coherentes se escalan al LLM, que añade recall sobre lo que las
-  reglas no ven.
+- `rule`, baseline por palabras clave (markers). Rápido, preciso en lo
+  literal, ciego a paráfrasis y a lo global.
+- `llm`, el LLM es el juez semántico único; su veredicto no se sobrescribe.
+- `hybrid`, las reglas cazan lo obvio; lo que consideran coherente se escala
+  al LLM (el LLM añade recall sobre las reglas).
 
-La salida cruda del LLM se valida con Pydantic antes de usarse (ver §5): si el
-modelo devuelve un JSON malformado o una etiqueta fuera del catálogo, el sistema
-degrada de forma segura en lugar de romperse.
+La salida del LLM se valida con Pydantic (ver §5).
 
 ### 4.3 Optimización de reparaciones (`detector/repair_optimizer.py`)
 
-Las tres variantes resuelven el mismo problema (el cubrimiento ponderado de la
-§2.4), pero con estrategias muy distintas:
+Tres variantes que resuelven el hitting set ponderado de la §2.4:
 
-CP-SAT (exacto, OR-Tools). CP-SAT es un solver de programación por
-restricciones apoyado en un motor SAT. Se le da el modelo de la §2.4: una
-variable binaria por cada reparación (aplicar / no aplicar), una restricción por
-cada inconsistencia ("al menos una de sus reparaciones debe aplicarse") y la
-función objetivo (minimizar el coste total). El solver hace una búsqueda
-inteligente (ramificación y acotamiento + propagación de restricciones +
-aprendizaje de cláusulas) que poda enormes partes del espacio de soluciones
-sin tener que enumerarlas, y demuestra la optimalidad: sabe cuándo ninguna
-solución mejor es posible. Garantiza el óptimo, a costa de un tiempo que en el
-peor caso es exponencial.
+- CP-SAT (OR-Tools), exacto: encuentra el óptimo y *demuestra* su
+  optimalidad.
+- Greedy, heurístico de set-cover: en cada paso elige la reparación con
+  mejor ratio `cobertura/coste`. Rápido, aproximado.
+- Recocido simulado (SA), metaheurístico, arranca en *warm-start* desde la
+  solución greedy.
 
-Greedy (heurístico voraz). Construye la solución paso a paso: en cada
-iteración elige la reparación con el mejor ratio `inconsistencias nuevas que
-cubre ÷ coste`, la añade, marca esas inconsistencias como cubiertas y repite hasta
-cubrir todas. Es muy rápido (tiempo polinómico), pero miope: cada decisión
-parece la mejor *en ese momento*, lo que puede llevar a un total globalmente malo
-(es exactamente lo que explota la "trampa-greedy" de §7.6).
-
-Recocido simulado (SA, metaheurístico). Inspirado en el enfriamiento de un metal:
-explora el espacio de soluciones aceptando a veces movimientos peores para
-escapar de óptimos locales. Arranca desde una solución inicial (*warm-start* = la
-de greedy) y repite: propone un vecino (un cambio pequeño: añadir o quitar una
-reparación, o añadir una candidata para una inconsistencia al azar) y lo evalúa.
-Si el vecino es mejor, lo acepta; si es peor, lo acepta con probabilidad
-`e^(−Δ/T)` —con temperatura `T` alta acepta empeoramientos con facilidad
-(explora), con `T` baja se vuelve exigente (explota)—. La temperatura baja
-gradualmente (enfriamiento), de modo que al principio explora mucho y al final
-afina. La función objetivo que minimiza combina el coste con una penalización
-fuerte por inconsistencias sin cubrir.
-
-Más allá de qué algoritmo se use, la estructura del problema incluye un caso
-especial que los tres aprovechan: las reparaciones raíz; es una forma de modelar el solapamiento entre inconsistencias.
-
-Una reparación "raíz" (p.ej. corregir la asignatura de un examen mal asignado)
-puede cubrir a la vez la inconsistencia estructural del examen, las
-recalificaciones derivadas y los comentarios textuales ligados a ese examen.
-CP-SAT (y también greedy y SA) lo aprovecha de forma natural: la reparación raíz
-se ofrece como alternativa a *todas* las inconsistencias que cubre, y por tanto el
-optimizador puede elegir una sola reparación cara que resuelve muchas en vez de
-varias baratas. Este es el punto donde el dataset real tiene solapamiento genuino
-entre reparaciones.
+Reparaciones raíz: una reparación "raíz" (p.ej. corregir la asignatura de un
+examen) puede cubrir simultáneamente la inconsistencia estructural del examen,
+las recalificaciones derivadas y los comentarios textuales ligados a ese examen.
+CP-SAT modela esto de forma natural ofreciendo la reparación raíz como
+alternativa a todas las inconsistencias que cubre.
 
 ### 4.4 Coherencia global: reparaciones auto-consistentes + verificación
 
@@ -380,19 +316,19 @@ categorías (de la matriz de confusión):
 | **El sistema lo marcó inconsistente** | **TP** (verdadero positivo) ✓ acierto | **FP** (falso positivo) ✗ falsa alarma |
 | **El sistema lo marcó coherente** | **FN** (falso negativo) ✗ se le escapó | TN (verdadero negativo) ✓ |
 
-- TP — inconsistencia real que el sistema sí detectó.
-- FP — algo coherente que el sistema marcó como inconsistente (falsa alarma).
-- FN — inconsistencia real que el sistema no detectó (se le pasó).
+- TP, inconsistencia real que el sistema sí detectó.
+- FP, algo coherente que el sistema marcó como inconsistente (falsa alarma).
+- FN, inconsistencia real que el sistema no detectó (se le pasó).
 
 A partir de ellas se calculan las métricas:
 
-- Precisión `= TP / (TP + FP)` — de todo lo que se marcó, qué fracción era
+- Precisión `= TP / (TP + FP)`, de todo lo que marqué, qué fracción era
   real. Penaliza las falsas alarmas.
-- Recall (exhaustividad) `= TP / (TP + FN)` — de todo lo que era real, qué
-  fracción se encontró. Penaliza lo que se escapa.
-- F1 `= 2·P·R / (P + R)` — media armónica de precisión y recall; resume ambas
+- Recall (exhaustividad) `= TP / (TP + FN)`, de todo lo que era real, qué
+  fracción encontré. Penaliza lo que se escapa.
+- F1 `= 2·P·R / (P + R)`, media armónica de precisión y recall; resume ambas
   en un solo número (alto solo si las dos son altas).
-- MCC (coeficiente de correlación de Matthews) `∈ [−1, 1]` — 1 = perfecto,
+- MCC (coeficiente de correlación de Matthews) `∈ [−1, 1]`, 1 = perfecto,
   0 = azar, negativo = peor que azar. Es robusto ante el desbalance (hay muchos
   registros coherentes y pocas inconsistencias), donde la precisión/recall pueden
   engañar.
@@ -412,10 +348,10 @@ La instancia principal usa la semilla 42; la robustez se mide sobre 3 semillas.
    `FP = detectados − GT`, `FN = GT − detectados`. Métricas: precisión, recall, F1
    y MCC por tipo y global.
 
-2. Detección textual — reglas vs LLM. Se ejecuta el detector en modo `rule` y
+2. Detección textual, reglas vs LLM. Se ejecuta el detector en modo `rule` y
    en modo `llm` (gemma4) y se evalúa por `report_id` contra `textual_ground_truth`,
    desglosando el recall por clase de redacción (canónica / parafraseada /
-   global) — `experiments/textual_eval.py`. Por el coste de inferencia local
+   global), `experiments/textual_eval.py`. Por el coste de inferencia local
    (~3 tokens/seg en CPU ⇒ ~50–75 s/llamada con gemma4), el LLM se corre sobre un
    subconjunto de evaluación = los 19 reportes con ground truth + 15 coherentes
    muestreados (flag `--eval-subset`). El recall queda exacto (incluye todo el GT) y
@@ -455,7 +391,7 @@ Perfecta en los 10 tipos: precisión = recall = F1 = 1.0, MCC = 1.0
 elimina los falsos positivos accidentales que un dataset aleatorio produciría
 (p.ej. duplicados o desajustes de curso fortuitos).
 
-### 7.2 Detección textual — reglas vs LLM
+### 7.2 Detección textual: reglas vs LLM
 
 Sobre el subconjunto de evaluación (34 reportes, 19 con inconsistencia):
 
@@ -472,7 +408,7 @@ Recall por clase de redacción (el resultado central del proyecto):
 | **parafraseada** (semántica local) | **0/11 (0%)** | **10/11 (91%)** |
 | **global** (comentario↔asignatura) | **0/4 (0%)** | **3/4 (75%)** |
 
-Las reglas tienen precisión perfecta pero recall ínfimo: solo ven
+Análisis. Las reglas tienen precisión perfecta pero recall ínfimo: solo ven
 coincidencias léxicas literales y son completamente ciegas a las paráfrasis
 (0/11) y a las contradicciones globales (0/4). El LLM hace razonamiento
 semántico real en dos niveles y eleva el F1 de 0.35 a 0.85. Esto demuestra,
@@ -495,10 +431,10 @@ repitió la detección textual con gemma4 sobre 3 datasets independientes
 | 789 | 0.857 | 0.947 | 0.900 | 100% | 89% | 100% |
 | **media [min–max]** | **0.905** [0.86–1.0] | **0.930** [0.90–0.95] | **0.915** [0.90–0.94] | 94% | 93% | 92% |
 
-El desempeño es estable (F1 entre 0.90 y 0.94): el LLM
+Análisis. El desempeño es estable (F1 entre 0.90 y 0.94): el LLM
 generaliza a instancias distintas, no acierta por suerte en una. El recall
-es la métrica robusta (0.93, rango estrecho [0.90–0.95]) porque su denominador —los
-reportes del ground truth— es fijo. La precisión varía más (0.86–1.0) y aquí
+es la métrica robusta (0.93, rango estrecho [0.90–0.95]) porque su denominador, los
+reportes del ground truth, es fijo. La precisión varía más (0.86–1.0) y aquí
 está estimada sobre una muestra pequeña de coherentes (subconjunto reducido),
 por lo que el 1.0 de la semilla 42 es optimista (con más coherentes ronda 0.81,
 §7.2). El razonamiento semántico se sostiene en ambos niveles a través de las
@@ -609,7 +545,7 @@ Posibles mejoras
 
 ---
 
-## Apéndice — Cómo reproducir
+## Apéndice: Cómo reproducir
 
 ```bash
 # Pipeline estructural completo + evaluación (sin LLM, rápido)

@@ -1,0 +1,805 @@
+<!DOCTYPE html><html lang='es'><head><meta charset='utf-8'><style>
+@page { size: A4; margin: 1.8cm 2cm; }
+body { font-family: 'Segoe UI', Calibri, Arial, sans-serif; font-size: 11pt;
+       line-height: 1.5; color: #1a1a1a; }
+h1 { font-size: 21pt; border-bottom: 2px solid #333; padding-bottom: 6px; }
+h2 { font-size: 15pt; border-bottom: 1px solid #ccc; padding-bottom: 4px;
+     margin-top: 1.5em; page-break-after: avoid; }
+h3 { font-size: 12.5pt; margin-top: 1.2em; page-break-after: avoid; }
+p, li { font-size: 11pt; }
+code { font-family: Consolas, 'Courier New', monospace; background: #f2f2f2;
+       padding: 1px 4px; border-radius: 3px; font-size: 10pt; }
+pre { background: #f6f8fa; border: 1px solid #e0e0e0; border-radius: 5px;
+      padding: 10px 12px; overflow-x: auto; page-break-inside: avoid; }
+pre code { background: none; padding: 0; font-size: 9.5pt; line-height: 1.35; }
+table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 10pt;
+        page-break-inside: avoid; }
+th, td { border: 1px solid #bbb; padding: 5px 8px; text-align: left; }
+th { background: #eaeef2; }
+blockquote { border-left: 4px solid #ccc; margin: 10px 0; padding: 4px 12px;
+             color: #444; background: #fafafa; }
+hr { border: none; border-top: 1px solid #ddd; margin: 1.5em 0; }
+</style></head><body><h1 id="informe-tecnico-sistema-inteligente-para-reparar-inconsistencias-en-registros">Informe técnico: Sistema inteligente para reparar inconsistencias en registros</h1>
+<blockquote>
+<p>Los números provienen de la instancia principal (semilla <code>42</code>) salvo
+la §7.3, que mide la robustez del LLM sobre 3 semillas (42, 123, 789). Todo es
+reproducible con <code>run_pipeline.py</code> y los scripts de <code>experiments/</code> (ver §6 y el
+Apéndice). Detección estructural y optimización son deterministas; la detección
+con LLM depende del modelo (gemma4 vía Ollama).</p>
+</blockquote>
+<hr />
+<h2 id="1-descripcion-del-problema">1. Descripción del problema</h2>
+<p>Dado un conjunto de hechos sobre registros académicos, unos estructurados
+(estudiantes, profesores, exámenes, resultados, recalificaciones) y otros
+textuales (comentarios de los profesores), que pueden contener
+contradicciones, el objetivo es encontrar un conjunto mínimo de
+modificaciones que restaure la coherencia global del historial.</p>
+<p>El problema tiene dos retos acoplados:</p>
+<ol>
+<li>
+<p>Detección. Identificar las inconsistencias. Algunas son verificables con
+   reglas duras (una nota fuera de <code>[0,20]</code>, un examen con fecha futura, un
+   resultado que referencia a un estudiante inexistente). Otras son
+   semánticas y solo se aprecian entendiendo el lenguaje: un comentario
+   elogioso junto a una nota de suspenso, o un comentario que describe una
+   asignatura distinta a la del examen. Estas últimas requieren un LLM.</p>
+</li>
+<li>
+<p>Reparación. Elegir <em>qué</em> cambiar. Como cada inconsistencia admite varias
+   reparaciones posibles (con distinto coste) y una misma reparación puede
+   resolver varias inconsistencias a la vez, hay que optimizar: minimizar el
+   coste total de las modificaciones sujeto a que todas las inconsistencias
+   queden cubiertas y a que no se introduzcan nuevas (coherencia global).</p>
+</li>
+</ol>
+<p>El sistema combina, por tanto, detección híbrida (reglas + LLM) con
+optimización combinatoria (CP-SAT y metaheurísticas).</p>
+<hr />
+<h2 id="2-modelado-formal">2. Modelado formal</h2>
+<h3 id="21-hechos-y-restricciones">2.1 Hechos y restricciones</h3>
+<p>Sea un dataset <code>D = (E, P, X, R, G, T)</code> con conjuntos de estudiantes <code>E</code>,
+profesores <code>P</code>, exámenes <code>X</code>, resultados <code>R</code>, recalificaciones <code>G</code> y reportes
+textuales <code>T</code>.</p>
+<p>Sobre <code>D</code> se define un conjunto de restricciones de integridad
+<code>C = {c₁, …, c_k}</code>. Cada <code>c_j</code> es un predicado sobre una o más entidades; por
+ejemplo:</p>
+<ul>
+<li><code>c_nota(r): 0 ≤ nota(r) ≤ 20</code></li>
+<li><code>c_edad(e): |edad(e) − (año_actual − año_nacimiento(e))| ≤ 1</code></li>
+<li><code>c_curso(e): edad(e) ∈ rango_edad(curso(e))</code></li>
+<li><code>c_ghost(r): estudiante(r) ∈ E ∧ examen(r) ∈ X</code></li>
+<li><code>c_sem(t): el comentario t es semánticamente coherente con (nota, asistencia, edad, asignatura)</code></li>
+</ul>
+<p>Una inconsistencia es una instancia de restricción violada. Llamamos
+<code>Inconsistencias(D)</code> al conjunto de todas las inconsistencias presentes en <code>D</code>
+(qué restricción se viola y sobre qué entidades).</p>
+<h3 id="22-reparaciones">2.2 Reparaciones</h3>
+<p>Una reparación <code>ρ</code> es una modificación del dataset (cambiar un campo, eliminar
+un registro, etc.). Cada reparación tiene un costo <code>costo(ρ)</code>, un entero
+positivo que modela el esfuerzo o riesgo de esa edición (p.ej. corregir una nota
+cuesta 1; eliminar un registro cuesta 5). Llamamos <code>REP</code> al conjunto de todas
+las reparaciones candidatas.</p>
+<p>Para cada inconsistencia <code>i</code>, definimos <code>Cubre(i)</code> = el conjunto de reparaciones
+candidatas que resuelven esa inconsistencia <code>i</code>.</p>
+<h3 id="23-problema-de-optimizacion">2.3 Problema de optimización</h3>
+<p>Buscamos el subconjunto de reparaciones <code>S</code> (con <code>S ⊆ REP</code>) que resuelve esto:</p>
+<pre><code> minimizar     la suma de los costos de las reparaciones elegidas:
+                          Σ   costo(ρ)
+                        ρ ∈ S
+
+ sujeto a:
+  (1) cobertura          cada inconsistencia debe quedar resuelta por al menos
+                         una reparación elegida.
+  (2) coherencia global  tras aplicar todas las reparaciones elegidas, el dataset
+                         no debe contener ninguna inconsistencia.
+</code></pre>
+<p>Escrito de forma compacta (y la lectura de cada símbolo):</p>
+<pre><code> min   Σ_{ρ ∈ S} costo(ρ)
+ s.a.  S ∩ Cubre(i) ≠ ∅            para toda inconsistencia i ∈ Inconsistencias(D)
+       Inconsistencias( aplicar(D, S) ) = ∅
+</code></pre>
+<p>donde:</p>
+<ul>
+<li><code>Σ_{ρ ∈ S} costo(ρ)</code> = "la suma de <code>costo(ρ)</code> para cada reparación <code>ρ</code> que está en <code>S</code>".</li>
+<li><code>S ∩ Cubre(i) ≠ ∅</code> = "<code>S</code> y <code>Cubre(i)</code> tienen al menos una reparación en común"
+  → es decir, elegí al menos una reparación que resuelve la inconsistencia <code>i</code>.</li>
+<li><code>para toda i ∈ Inconsistencias(D)</code> = "esto debe cumplirse para cada inconsistencia del dataset".</li>
+<li><code>aplicar(D, S)</code> = "el dataset que queda después de aplicar a <code>D</code> todas las reparaciones de <code>S</code>".</li>
+<li><code>Inconsistencias(…) = ∅</code> = "ese dataset no tiene ninguna inconsistencia" (<code>∅</code> = conjunto vacío).</li>
+</ul>
+<p>La restricción (1) cobertura es exactamente un problema clásico llamado
+cubrimiento de conjuntos ponderado de costo mínimo (<em>weighted minimum set
+cover</em> / <em>hitting set</em>), que es NP-difícil. La restricción (2) coherencia
+global exige además que el dataset reparado quede totalmente limpio, sin
+inconsistencias nuevas introducidas como efecto colateral de una reparación (una
+<em>cascada</em>).</p>
+<h3 id="24-formulacion-cp-sat">2.4 Formulación CP-SAT</h3>
+<p>Para resolverlo con el solver, se define una variable binaria <code>x_ρ ∈ {0,1}</code>
+por cada reparación candidata: <code>x_ρ = 1</code> significa "la reparación <code>ρ</code> se aplica",
+y <code>x_ρ = 0</code> significa "no se aplica". El modelo queda:</p>
+<pre><code> min   Σ_ρ costo(ρ) · x_ρ                            (minimizar el costo total)
+ s.a.  Σ_{ρ ∈ Cubre(i)} x_ρ ≥ 1     para toda i      (cada inconsistencia, cubierta
+                                                       por ≥ 1 reparación aplicada)
+       x_ρ ∈ {0,1}
+</code></pre>
+<p>La coherencia global no se codifica como restricción del modelo (ver §4.4): se
+garantiza por construcción (reparaciones auto-consistentes) y se verifica a
+posteriori re-detectando sobre el dataset reparado <code>aplicar(D, S)</code>.</p>
+<hr />
+<h2 id="3-dataset">3. Dataset</h2>
+<h3 id="31-naturaleza">3.1 Naturaleza</h3>
+<p>Dataset sintético generado por <code>data/seed.py</code> (semilla fija para
+reproducibilidad). Escala de la instancia principal (semilla 42):</p>
+<table>
+<thead>
+<tr>
+<th>Entidad</th>
+<th>Cantidad</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Estudiantes</td>
+<td>50</td>
+</tr>
+<tr>
+<td>Profesores</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Exámenes</td>
+<td>40</td>
+</tr>
+<tr>
+<td>Resultados</td>
+<td>159</td>
+</tr>
+<tr>
+<td>Recalificaciones</td>
+<td>48</td>
+</tr>
+<tr>
+<td>Reportes de profesor</td>
+<td>156</td>
+</tr>
+</tbody>
+</table>
+<h3 id="32-proceso-de-generacion">3.2 Proceso de generación</h3>
+<p>La generación sigue el patrón "base limpia + inyección controlada":</p>
+<ol>
+<li>
+<p>Base coherente. Primero se generan entidades que satisfacen <em>todas</em> las
+   restricciones (edades acordes al curso, créditos en rango, notas en <code>[0,20]</code>,
+   pares <code>(estudiante, examen)</code> únicos, fechas pasadas, etc.).</p>
+</li>
+<li>
+<p>Inyección determinista. Se inyecta un número exacto y conocido de cada
+   tipo de inconsistencia, sobre conjuntos de entidades disjuntos y de forma
+   no cascada, de modo que <code>inyectadas == reales</code>. Dos decisiones de diseño
+   clave garantizan esto:
+   - La inconsistencia <em>edad↔nacimiento</em> se inyecta desplazando la fecha de
+     nacimiento (no la edad), para que la edad siga siendo válida para el curso
+     y no se dispare además una inconsistencia <em>curso↔edad</em>.
+   - La inconsistencia <em>curso↔edad</em> re-ajusta los créditos al rango del nuevo
+     curso, para no disparar además una inconsistencia de créditos.</p>
+</li>
+<li>
+<p>Ground truth por ID. El generador registra en <code>metadata</code> qué entidad
+   exacta lleva cada inconsistencia (<code>structural_ground_truth</code>) y, para las
+   textuales, el <code>report_id</code>, el tipo y la clase de redacción
+   (<code>textual_ground_truth</code>). Esto permite evaluación a nivel de instancia
+   (no solo por conteo).</p>
+</li>
+</ol>
+<h3 id="33-inconsistencias-inyectadas-semilla-42">3.3 Inconsistencias inyectadas (semilla 42)</h3>
+<table>
+<thead>
+<tr>
+<th>Tipo</th>
+<th>Cantidad</th>
+<th>Detector</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>age_birth_mismatch</td>
+<td>5</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>course_age_mismatch</td>
+<td>4</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>credits_mismatch</td>
+<td>4</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>invalid_grade</td>
+<td>6</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>ghost_student</td>
+<td>3</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>ghost_exam</td>
+<td>3</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>professor_subject_mismatch</td>
+<td>4</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>future_exam_date</td>
+<td>3</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>duplicate_result</td>
+<td>3</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td>orphan_regrade</td>
+<td>3</td>
+<td>estructural</td>
+</tr>
+<tr>
+<td><strong>textual_inconsistency</strong></td>
+<td><strong>19</strong></td>
+<td><strong>textual (LLM)</strong></td>
+</tr>
+<tr>
+<td><strong>Total</strong></td>
+<td><strong>57</strong></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Las 19 textuales se subdividen por clase de redacción, que es central para
+medir el valor del LLM:</p>
+<ul>
+<li>Canónica (4): usan frases del catálogo que las reglas por palabras clave
+  <em>sí</em> pueden cazar.</li>
+<li>Parafraseada (11): misma contradicción semántica (nota↔comentario,
+  asistencia↔comentario, edad↔comentario) pero con vocabulario ausente de los
+  markers, solo detectable razonando sobre el significado.</li>
+<li>Global (4): el comentario describe una asignatura distinta a la del
+  examen (p.ej. "ecuaciones y cálculo" en un examen de física). Es una
+  contradicción entre dos elementos del historial (reporte ↔ examen),
+  invisible tanto para las reglas como para un chequeo local que no mire la
+  asignatura.</li>
+</ul>
+<h3 id="34-por-que-cumple-las-condiciones-del-problema">3.4 ¿Por qué cumple las condiciones del problema?</h3>
+<ul>
+<li>Contiene hechos estructurados y textuales con contradicciones reales de
+  ambos tipos (verificables por reglas y semánticas).</li>
+<li>Tiene ground truth exacto (por ID y por tipo), lo que permite medir
+  detección y reparación con rigor.</li>
+<li>Las inconsistencias textuales están diseñadas para discriminar reglas vs
+  LLM: la presencia de casos parafraseados y globales hace que un detector
+  puramente léxico fracase y que solo un evaluador semántico (LLM) los resuelva, exactamente el escenario que la consigna exige evaluar.</li>
+<li>Las reparaciones se solapan (una reparación raíz cubre varias
+  inconsistencias), lo que da sustancia al problema de optimización.</li>
+</ul>
+<hr />
+<h2 id="4-diseno-del-algoritmo">4. Diseño del algoritmo</h2>
+<p>El sistema es un pipeline de 5 etapas (<code>run_pipeline.py</code>):</p>
+<pre><code>seed.py → structural_rules.py → llm_detector.py → repair_optimizer.py → validate.py / evaluate.py
+</code></pre>
+<h3 id="41-deteccion-estructural-detectorstructural_rulespy">4.1 Detección estructural (<code>detector/structural_rules.py</code>)</h3>
+<p>Diez detectores deterministas, uno por restricción dura. Cada inconsistencia
+detectada incluye las entidades implicadas y reparaciones sugeridas. Es exacto y
+explicable.</p>
+<h3 id="42-deteccion-textual-detectorllm_detectorpy">4.2 Detección textual (<code>detector/llm_detector.py</code>)</h3>
+<p>Tres modos seleccionables por <code>DETECTOR_MODE</code>:</p>
+<ul>
+<li><code>rule</code>, baseline por palabras clave (markers). Rápido, preciso en lo
+  literal, ciego a paráfrasis y a lo global.</li>
+<li><code>llm</code>, el LLM es el juez semántico único; su veredicto no se sobrescribe.</li>
+<li><code>hybrid</code>, las reglas cazan lo obvio; lo que consideran coherente se escala
+  al LLM (el LLM añade recall sobre las reglas).</li>
+</ul>
+<p>La salida del LLM se valida con Pydantic (ver §5).</p>
+<h3 id="43-optimizacion-de-reparaciones-detectorrepair_optimizerpy">4.3 Optimización de reparaciones (<code>detector/repair_optimizer.py</code>)</h3>
+<p>Tres variantes que resuelven el hitting set ponderado de la §2.4:</p>
+<ul>
+<li>CP-SAT (OR-Tools), exacto: encuentra el óptimo y <em>demuestra</em> su
+  optimalidad.</li>
+<li>Greedy, heurístico de set-cover: en cada paso elige la reparación con
+  mejor ratio <code>cobertura/coste</code>. Rápido, aproximado.</li>
+<li>Recocido simulado (SA), metaheurístico, arranca en <em>warm-start</em> desde la
+  solución greedy.</li>
+</ul>
+<p>Reparaciones raíz: una reparación "raíz" (p.ej. corregir la asignatura de un
+examen) puede cubrir simultáneamente la inconsistencia estructural del examen,
+las recalificaciones derivadas y los comentarios textuales ligados a ese examen.
+CP-SAT modela esto de forma natural ofreciendo la reparación raíz como
+alternativa a todas las inconsistencias que cubre.</p>
+<h3 id="44-coherencia-global-reparaciones-auto-consistentes-verificacion">4.4 Coherencia global: reparaciones auto-consistentes + verificación</h3>
+<p>En lugar de codificar las cascadas como restricciones (ver §8), se garantiza la
+coherencia global con dos mecanismos:</p>
+<ol>
+<li>Reparaciones auto-consistentes. Cada reparación se diseña para no romper
+   otros invariantes: corregir <em>edad↔nacimiento</em> edita la fecha de nacimiento (no
+   la edad, que participa en otras restricciones); cambiar el curso ajusta los
+   créditos al rango del nuevo curso en el mismo paso.</li>
+<li>Verificación post-reparación. Tras aplicar <code>S</code>, el optimizador re-detecta
+   estructuralmente sobre el dataset reparado y registra en <code>repair_plan.json</code>:
+   <code>json
+   "verification": {"global_coherence_verified": true,
+                    "residual_structural_issues": 0, "residual_by_type": {}}</code>
+   Así "coherencia global restaurada" es una propiedad probada en cada corrida,
+   no una suposición. (<code>validate.py</code> repite esta comprobación de forma
+   independiente.)</li>
+</ol>
+<hr />
+<h2 id="5-rol-del-llm-en-el-sistema">5. Rol del LLM en el sistema</h2>
+<p>El LLM (servido localmente con Ollama; modelo gemma4 8B) es el
+evaluador de consistencia semántica, la pieza que la consigna exige y que
+ningún método léxico puede sustituir.</p>
+<ul>
+<li>Entrada. Para cada reporte se le pasan los hechos objetivos (edad,
+  asistencia, curso, asignatura del examen, nota) y el comentario. Se le da el
+  <em>significado</em> de las escalas (qué es una nota alta, qué es asistencia baja) pero
+  no los umbrales-regla, para que razone la coherencia en vez de ejecutar
+  condiciones predefinidas.</li>
+<li>Tarea. Decidir si el comentario es coherente y, si no, clasificar el tipo y
+  reescribirlo de forma coherente. Detecta dos niveles de consistencia semántica:</li>
+<li>Local: comentario ↔ nota/asistencia/edad del propio estudiante.</li>
+<li>Global: comentario ↔ asignatura del examen (consistencia <em>entre elementos
+    del historial</em>).</li>
+<li>Validación con Pydantic. Tres modelos tipados blindan la frontera con el
+  LLM: <code>LLMOutputRaw</code> (parseo laxo del JSON crudo), <code>LLMOutputValidated</code> (esquema
+  estricto: el tipo debe pertenecer a un <code>Literal[...]</code> cerrado, el comentario
+  reparado no vacío) y <code>TextualRecord</code> (registro final). Importante: Pydantic
+  valida la forma de la respuesta (que sea un JSON con tipos y etiquetas
+  válidas), no la corrección del veredicto. La corrección semántica la aporta
+  el LLM; su calidad se mide a posteriori contra el ground truth (§7). Ante un JSON
+  malformado, el sistema degrada de forma segura a un <em>fallback</em> coherente.</li>
+</ul>
+<hr />
+<h2 id="6-metodologia-experimental">6. Metodología experimental</h2>
+<h3 id="60-metricas-de-evaluacion-que-son-tp-fp-fn">6.0 Métricas de evaluación (qué son TP, FP, FN)</h3>
+<p>Cada detección se compara contra el ground truth y se clasifica en una de cuatro
+categorías (de la matriz de confusión):</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Es realmente inconsistente</th>
+<th>Es realmente coherente</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>El sistema lo marcó inconsistente</strong></td>
+<td><strong>TP</strong> (verdadero positivo) ✓ acierto</td>
+<td><strong>FP</strong> (falso positivo) ✗ falsa alarma</td>
+</tr>
+<tr>
+<td><strong>El sistema lo marcó coherente</strong></td>
+<td><strong>FN</strong> (falso negativo) ✗ se le escapó</td>
+<td>TN (verdadero negativo) ✓</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li>TP, inconsistencia real que el sistema sí detectó.</li>
+<li>FP, algo coherente que el sistema marcó como inconsistente (falsa alarma).</li>
+<li>FN, inconsistencia real que el sistema no detectó (se le pasó).</li>
+</ul>
+<p>A partir de ellas se calculan las métricas:</p>
+<ul>
+<li>Precisión <code>= TP / (TP + FP)</code>, de todo lo que marqué, qué fracción era
+  real. Penaliza las falsas alarmas.</li>
+<li>Recall (exhaustividad) <code>= TP / (TP + FN)</code>, de todo lo que era real, qué
+  fracción encontré. Penaliza lo que se escapa.</li>
+<li>F1 <code>= 2·P·R / (P + R)</code>, media armónica de precisión y recall; resume ambas
+  en un solo número (alto solo si las dos son altas).</li>
+<li>MCC (coeficiente de correlación de Matthews) <code>∈ [−1, 1]</code>, 1 = perfecto,
+  0 = azar, negativo = peor que azar. Es robusto ante el desbalance (hay muchos
+  registros coherentes y pocas inconsistencias), donde la precisión/recall pueden
+  engañar.</li>
+</ul>
+<p>Evaluación por ID (no por conteo). Una detección cuenta como TP solo si cae
+sobre la entidad exacta que es inconsistente (el <code>student_id</code>, <code>result_id</code>,
+<code>exam_id</code> o <code>report_id</code> correcto). No basta con acertar el <em>número</em> de
+inconsistencias: marcar 5 estudiantes equivocados no es un acierto. Esto evita
+inflar los resultados y es más estricto que una evaluación por conteo.</p>
+<h3 id="61-experimentos">6.1 Experimentos</h3>
+<p>La instancia principal usa la semilla 42; la robustez se mide sobre 3 semillas.</p>
+<ol>
+<li>
+<p>Detección estructural. <code>evaluate.py</code> compara las detecciones contra
+   <code>structural_ground_truth</code> por ID (no por conteo): <code>TP = |GT ∩ detectados|</code>,
+   <code>FP = detectados − GT</code>, <code>FN = GT − detectados</code>. Métricas: precisión, recall, F1
+   y MCC por tipo y global.</p>
+</li>
+<li>
+<p>Detección textual, reglas vs LLM. Se ejecuta el detector en modo <code>rule</code> y
+   en modo <code>llm</code> (gemma4) y se evalúa por <code>report_id</code> contra <code>textual_ground_truth</code>,
+   desglosando el recall por clase de redacción (canónica / parafraseada /
+   global), <code>experiments/textual_eval.py</code>. Por el coste de inferencia local
+   (~3 tokens/seg en CPU ⇒ ~50–75 s/llamada con gemma4), el LLM se corre sobre un
+   subconjunto de evaluación = los 19 reportes con ground truth + 15 coherentes
+   muestreados (flag <code>--eval-subset</code>). El recall queda exacto (incluye todo el GT) y
+   la precisión queda estimada sobre la muestra.</p>
+</li>
+<li>
+<p>Robustez del LLM entre instancias (<code>experiments/llm_robustness.py</code>).
+   Se repite la detección con LLM sobre 3 semillas independientes (42, 123, 789),
+   cada una en su subconjunto, y se agrega el recall por clase de redacción
+   (media y rango) para comprobar que el LLM generaliza y no acierta por azar.</p>
+</li>
+<li>
+<p>Comparación de configuraciones (<code>experiments/compare_detectors.py</code>).
+   Tabla <code>rule</code> / <code>hybrid</code> / <code>llm</code> sobre el mismo subconjunto; <code>hybrid</code> se deriva
+   como la unión <code>rule ∪ llm</code>.</p>
+</li>
+<li>
+<p>Comparación de optimizadores (<code>experiments/hard_instances.py</code>). Como el
+   dataset real es "fácil" (las 3 variantes empatan), se generan familias de
+   instancias difíciles de hitting set ponderado, en el mismo formato que
+   consumen los solvers reales: una familia aleatoria con solapamiento y una
+   trampa-greedy (caso clásico donde greedy ≈ <code>ln(n)·óptimo</code>). Se reporta
+   coste, <em>gap</em> respecto al óptimo de CP-SAT y tiempo.</p>
+</li>
+<li>
+<p>Ajuste de la metaheurística (<code>experiments/sa_tuning.py</code>). Barrido de
+   temperatura inicial y operador de vecindad de SA sobre la trampa-greedy, para
+   estudiar si y cómo escapa del óptimo local.</p>
+</li>
+<li>
+<p>Verificación de coherencia global. En cada corrida del optimizador se
+   re-detecta sobre el dataset reparado (§4.4).</p>
+</li>
+</ol>
+<hr />
+<h2 id="7-resultados-y-analisis">7. Resultados y análisis</h2>
+<h3 id="71-deteccion-estructural">7.1 Detección estructural</h3>
+<p>Perfecta en los 10 tipos: precisión = recall = F1 = 1.0, MCC = 1.0
+(TP=38, FP=0, FN=0). El diseño "base limpia + inyección disjunta no cascada"
+elimina los falsos positivos accidentales que un dataset aleatorio produciría
+(p.ej. duplicados o desajustes de curso fortuitos).</p>
+<h3 id="72-deteccion-textual-reglas-vs-llm">7.2 Detección textual: reglas vs LLM</h3>
+<p>Sobre el subconjunto de evaluación (34 reportes, 19 con inconsistencia):</p>
+<table>
+<thead>
+<tr>
+<th>Detector</th>
+<th>TP</th>
+<th>FP</th>
+<th>FN</th>
+<th>Precisión</th>
+<th>Recall</th>
+<th>F1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>rule</strong></td>
+<td>4</td>
+<td>0</td>
+<td>15</td>
+<td>1.000</td>
+<td>0.211</td>
+<td>0.348</td>
+</tr>
+<tr>
+<td><strong>llm (gemma4)</strong></td>
+<td>17</td>
+<td>4</td>
+<td>2</td>
+<td>0.810</td>
+<td>0.895</td>
+<td><strong>0.850</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Recall por clase de redacción (el resultado central del proyecto):</p>
+<table>
+<thead>
+<tr>
+<th>Clase</th>
+<th>reglas</th>
+<th>LLM (gemma4)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>canónica (léxica)</td>
+<td>4/4 (100%)</td>
+<td>4/4 (100%)</td>
+</tr>
+<tr>
+<td><strong>parafraseada</strong> (semántica local)</td>
+<td><strong>0/11 (0%)</strong></td>
+<td><strong>10/11 (91%)</strong></td>
+</tr>
+<tr>
+<td><strong>global</strong> (comentario↔asignatura)</td>
+<td><strong>0/4 (0%)</strong></td>
+<td><strong>3/4 (75%)</strong></td>
+</tr>
+</tbody>
+</table>
+<p>Análisis. Las reglas tienen precisión perfecta pero recall ínfimo: solo ven
+coincidencias léxicas literales y son completamente ciegas a las paráfrasis
+(0/11) y a las contradicciones globales (0/4). El LLM hace razonamiento
+semántico real en dos niveles y eleva el F1 de 0.35 a 0.85. Esto demuestra,
+con métrica, <em>por qué</em> la consigna exige un LLM: es lo único que generaliza más
+allá del catálogo de palabras. El único caso global no detectado (comentario de
+<em>química</em> en examen de <em>biología</em>) es un <em>borderline</em> razonable por el solapamiento
+temático de ambas ciencias.</p>
+<h3 id="73-robustez-del-llm-entre-instancias-multi-semilla">7.3 Robustez del LLM entre instancias (multi-semilla)</h3>
+<p>Para comprobar que el desempeño del LLM no es un artefacto de la semilla 42, se
+repitió la detección textual con gemma4 sobre 3 datasets independientes
+(semillas 42, 123, 789), cada uno evaluado sobre su propio subconjunto
+(<code>experiments/llm_robustness.py</code>):</p>
+<table>
+<thead>
+<tr>
+<th>seed</th>
+<th>Prec</th>
+<th>Recall</th>
+<th>F1</th>
+<th>canónica</th>
+<th>parafr.</th>
+<th>global</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>42</td>
+<td>1.000</td>
+<td>0.895</td>
+<td>0.944</td>
+<td>100%</td>
+<td>91%</td>
+<td>75%</td>
+</tr>
+<tr>
+<td>123</td>
+<td>0.857</td>
+<td>0.947</td>
+<td>0.900</td>
+<td>83%</td>
+<td>100%</td>
+<td>100%</td>
+</tr>
+<tr>
+<td>789</td>
+<td>0.857</td>
+<td>0.947</td>
+<td>0.900</td>
+<td>100%</td>
+<td>89%</td>
+<td>100%</td>
+</tr>
+<tr>
+<td><strong>media [min–max]</strong></td>
+<td><strong>0.905</strong> [0.86–1.0]</td>
+<td><strong>0.930</strong> [0.90–0.95]</td>
+<td><strong>0.915</strong> [0.90–0.94]</td>
+<td>94%</td>
+<td>93%</td>
+<td>92%</td>
+</tr>
+</tbody>
+</table>
+<p>Análisis. El desempeño es estable (F1 entre 0.90 y 0.94): el LLM
+generaliza a instancias distintas, no acierta por suerte en una. El recall
+es la métrica robusta (0.93, rango estrecho [0.90–0.95]) porque su denominador, los
+reportes del ground truth, es fijo. La precisión varía más (0.86–1.0) y aquí
+está estimada sobre una muestra pequeña de coherentes (subconjunto reducido),
+por lo que el 1.0 de la semilla 42 es optimista (con más coherentes ronda 0.81,
+§7.2). El razonamiento semántico se sostiene en ambos niveles a través de las
+semillas: parafraseada 89–100%, global 75–100%.</p>
+<h3 id="74-comparacion-de-configuraciones">7.4 Comparación de configuraciones</h3>
+<table>
+<thead>
+<tr>
+<th>Modo</th>
+<th>Prec</th>
+<th>Recall</th>
+<th>F1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>rule</td>
+<td>1.000</td>
+<td>0.211</td>
+<td>0.348</td>
+</tr>
+<tr>
+<td>hybrid</td>
+<td>0.810</td>
+<td>0.895</td>
+<td>0.850</td>
+</tr>
+<tr>
+<td>llm</td>
+<td>0.810</td>
+<td>0.895</td>
+<td>0.850</td>
+</tr>
+</tbody>
+</table>
+<p><code>hybrid == llm</code> porque el LLM cazó todo lo que cazaron las reglas y más; la
+unión no añade nada. Conclusión: con un LLM suficientemente capaz, el modo híbrido
+no aporta sobre el LLM solo (solo serviría si las reglas cubrieran algún caso que
+el LLM falla).</p>
+<h3 id="75-optimizacion-reparacion-del-dataset-real">7.5 Optimización: reparación del dataset real</h3>
+<p>CP-SAT cubre las 48 inconsistencias con 46 reparaciones, coste total 102,
+y la coherencia global queda verificada (0 inconsistencias residuales). Sobre
+el dataset real, greedy y SA producen el mismo resultado que CP-SAT (la
+instancia es fácil), por lo que la comparación de optimizadores se hace sobre
+instancias difíciles.</p>
+<h3 id="76-comparacion-de-optimizadores-instancias-dificiles">7.6 Comparación de optimizadores (instancias difíciles)</h3>
+<p>Familia aleatoria (gap medio respecto al óptimo de CP-SAT): greedy +10.6 %,
+SA +7.9 %. CP-SAT demuestra optimalidad en todas las instancias.</p>
+<p>Familia trampa-greedy (un repair óptimo cubre todo; greedy cae en la escalera):</p>
+<table>
+<thead>
+<tr>
+<th>n</th>
+<th>CP-SAT (óptimo)</th>
+<th>greedy</th>
+<th>SA (def.)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>16</td>
+<td>15000</td>
+<td>+125%</td>
+<td>+125%</td>
+</tr>
+<tr>
+<td>32</td>
+<td>15000</td>
+<td>+171%</td>
+<td>+171%</td>
+</tr>
+<tr>
+<td>64</td>
+<td>15000</td>
+<td>+216%</td>
+<td>+216%</td>
+</tr>
+<tr>
+<td>128</td>
+<td>15000</td>
+<td>+262%</td>
+<td>+262%</td>
+</tr>
+</tbody>
+</table>
+<p>El <em>gap</em> de greedy crece con <code>n</code> siguiendo <code>~ln(n)</code>, exactamente como predice la
+teoría de aproximación de set-cover. SA por defecto hereda la mala solución de
+greedy (su warm-start) y no escapa.</p>
+<h3 id="77-ajuste-de-la-metaheuristica-trampa-n64-optimo15000">7.7 Ajuste de la metaheurística (trampa n=64, óptimo=15000)</h3>
+<table>
+<thead>
+<tr>
+<th>Configuración SA</th>
+<th>coste medio</th>
+<th>gap</th>
+<th>escapó</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>default (T₀=25)</td>
+<td>47437</td>
+<td>+216%</td>
+<td>0/5</td>
+</tr>
+<tr>
+<td>caliente (T₀=2000)</td>
+<td>47437</td>
+<td>+216%</td>
+<td>0/5</td>
+</tr>
+<tr>
+<td>muy caliente (T₀=20000)</td>
+<td>16407</td>
+<td>+9%</td>
+<td>0/5</td>
+</tr>
+<tr>
+<td><strong>+ poda de redundancia (T₀=25)</strong></td>
+<td><strong>15000</strong></td>
+<td><strong>+0%</strong></td>
+<td><strong>5/5</strong></td>
+</tr>
+<tr>
+<td>+ poda de redundancia (T₀=2000)</td>
+<td>15000</td>
+<td>+0%</td>
+<td>5/5</td>
+</tr>
+</tbody>
+</table>
+<p>Análisis. Subir la temperatura ayuda pero es frágil (mejora a +9% pero no
+alcanza el óptimo). En cambio, añadir un operador de poda de redundancia
+(eliminar reparaciones que dejan de ser necesarias) convierte "añadir la
+reparación raíz" en un movimiento <em>cuesta abajo</em> y SA escapa de la trampa de forma
+robusta (5/5). Lección de comportamiento: la calidad de una metaheurística
+depende tanto del operador de vecindad como de la temperatura; CP-SAT, al ser
+exacto, encuentra el óptimo siempre sin necesidad de ajuste.</p>
+<h3 id="78-comportamiento-del-llm-local">7.8 Comportamiento del LLM local</h3>
+<p>Hallazgo relevante de ingeniería: la inferencia local es generation-bound
+(~3 tokens/seg en CPU), de ahí ~50–75 s por llamada con gemma4. Además, el modelo
+más pequeño probado (neural-chat 7B) sobre-detecta (marca como
+inconsistentes reportes coherentes), mientras que gemma4 8B (con razonamiento
+interno) acierta de forma fiable. Conclusión: la calidad de la evaluación
+semántica depende fuertemente del modelo, y hay un compromiso explícito
+precisión ↔ latencia.</p>
+<hr />
+<h2 id="8-limitaciones-y-posibles-mejoras">8. Limitaciones y posibles mejoras</h2>
+<p>Limitaciones</p>
+<ol>
+<li>Coste de inferencia del LLM. ~50–75 s/llamada en CPU obliga a evaluar sobre
+   un subconjunto; un pase completo de los 156 reportes tarda horas.</li>
+<li>Coherencia global fuera del modelo. Las cascadas se evitan con reparaciones
+   auto-consistentes y se <em>verifican</em> a posteriori, pero no se modelan como
+   restricciones dentro de CP-SAT; la minimalidad es, por tanto, minimalidad sobre
+   las inconsistencias <em>detectadas</em>, no un óptimo global demostrado frente a
+   cualquier cascada posible.</li>
+<li>Consistencia global limitada a comentario↔asignatura. No se cubren aún
+   contradicciones entre <em>múltiples comentarios</em> del mismo estudiante o entre
+   comentario y recalificaciones.</li>
+<li>Costes de reparación heurísticos. Los pesos (1, 2, 3, 5…) son razonables
+   pero no están calibrados empíricamente.</li>
+<li>Dataset sintético. Reproducible y con ground truth, pero no captura todo el
+   ruido de datos reales.</li>
+</ol>
+<p>Posibles mejoras</p>
+<ol>
+<li>Modelar las cascadas en CP-SAT (restricciones de implicación entre
+   reparaciones) para un óptimo global demostrable.</li>
+<li>Consistencia global más rica: pasar al LLM el <em>historial completo</em> del
+   estudiante (varios comentarios, recalificaciones, profesor) y detectar
+   contradicciones entre registros.</li>
+<li>Acelerar el LLM: cuantización/GPU, procesamiento por lotes, o un modelo
+   destilado; e introducir <em>few-shot</em> para subir la precisión de modelos pequeños.</li>
+<li>Calibrar los costes con criterio de dominio o aprendiéndolos.</li>
+<li>Validar sobre datos reales (anonimizar registros académicos reales) y medir
+   transferencia.</li>
+<li>Verificación textual post-reparación con el LLM (hoy solo se re-verifica la
+   parte estructural).</li>
+</ol>
+<hr />
+<h2 id="apendice-como-reproducir">Apéndice: Cómo reproducir</h2>
+<pre><code class="language-bash"># Pipeline estructural completo + evaluación (sin LLM, rápido)
+python run_pipeline.py --skip-textual         # usa modo rule por defecto
+
+# Detección textual con LLM (gemma4) sobre subconjunto de evaluación
+DETECTOR_MODE=llm OLLAMA_MODEL=gemma4 python detector/llm_detector.py \
+    --output data/textual_llm.json --eval-subset 15 --timeout 180
+
+# Evaluación textual por ID y por redacción
+python experiments/textual_eval.py --textual data/textual_llm.json --label llm
+python experiments/compare_detectors.py        # tabla rule/hybrid/llm
+
+# Robustez del LLM entre instancias (3 semillas, ~50-60 min en CPU)
+python experiments/llm_robustness.py --seeds 42 123 789 --subset 6
+
+# Comparación de optimizadores y ajuste de SA (rápidos, sin LLM)
+python experiments/hard_instances.py
+python experiments/sa_tuning.py
+</code></pre>
+<p>Artefactos generados: <code>data/evaluation_report.json</code>, <code>data/repair_plan.json</code>
+(incluye el bloque <code>verification</code>), <code>data/config_comparison_light.json</code>,
+<code>data/llm_robustness_report.json</code>, <code>data/hard_instances_report.json</code>,
+<code>data/sa_tuning_report.json</code>.</p></body></html>
